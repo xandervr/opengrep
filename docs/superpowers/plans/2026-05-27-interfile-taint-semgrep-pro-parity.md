@@ -44,7 +44,7 @@
 - JavaScript and TypeScript constructor-assigned helper instances now resolve when constructors assign `this.source = new Source()` and later methods call `this.source.getInput()`.
 - TypeScript constructor parameter properties now resolve when a typed parameter property such as `constructor(private source: Source)` is later used through `this.source.getInput()`.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
-- JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, or a same-class conditional branch alias into `new App(...)`.
+- JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, or a same-class conditional branch alias into `new App(...)`.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -74,6 +74,7 @@
 - `71ba70c2f2393f74afc1619f5b6d7d1e4ca78acb` - `fix: resolve javascript constructor factory aliases` (unsigned for the same local signing issue)
 - `71acd60311803d98ea4a9f98f4bb4a9f5bae4270` - `fix: resolve javascript constructor branch aliases` (unsigned for the same local signing issue)
 - `5c61c4cfb6a05c0b513fdd99d87b9926a45bf219` - `fix: resolve javascript factory local aliases` (unsigned for the same local signing issue)
+- `1c95ff0404b22ded79d9dce3a321e8c034983290` - `fix: resolve javascript arrow factories` (unsigned for the same local signing issue)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -255,7 +256,7 @@ python count=1 errors=0 interfile_lang_count=1
 js count=1 errors=0 interfile_lang_count=1
 ```
 
-Latest broad Docker direct scan matrix after `5c61c4cfb`:
+Latest broad Docker direct scan matrix after `1c95ff040`:
 
 ```text
 taint_interfile_js count=1 expected=1 errors=0 interfile_lang_count=1
@@ -269,6 +270,7 @@ taint_interfile_js_constructor_parameter_alias count=1 expected=1 errors=0 inter
 taint_interfile_js_constructor_parameter_reassigned_alias count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_factory count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_factory_local_alias count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_js_constructor_parameter_arrow_factory count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_branch_alias count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_typescript_parameter_property count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_js_sanitizer count=1 expected=1 errors=0 interfile_lang_count=1
@@ -399,6 +401,7 @@ Verified in this handoff:
 - Focused direct scans passed for simple reassigned JavaScript constructor-parameter helper aliases where `const selected = helper; new App(selected)` supplies the helper object.
 - Focused direct scans passed for simple factory-returned JavaScript constructor-parameter helpers where `function createSource() { return new Source(); }` feeds `const helper = createSource(); new App(helper)`.
 - Focused direct scans passed for factory-local JavaScript constructor-parameter helper aliases where `function createSource() { const helper = new Source(); return helper; }` feeds `const selected = createSource(); new App(selected)`.
+- Focused direct scans passed for JavaScript arrow-function constructor factories where `const createSource = () => new Source(); const helper = createSource(); new App(helper)` supplies the helper object.
 - Focused direct scans passed for same-class conditional JavaScript constructor-parameter helper aliases where `const selected = condition() ? primary : fallback; new App(selected)` supplies the helper object.
 - Direct probes passed for Java/Python/JavaScript override dispatch and multi-level inheritance.
 - Broad direct scans passed for `taint_interfile_language_matrix` with 28 findings and `taint_interfile_parser_smoke` with 13 findings.
@@ -409,7 +412,7 @@ Verified in this handoff:
 
 Known boundaries:
 - `generic` and `regex` are extended non-AST analyzers, not parser-backed target languages. Taint mode now rejects them with a structured `SemgrepError` and CLI help documents that they do not support taint mode.
-- Untyped JavaScript constructor-parameter injection for direct constructor calls such as `constructor(source) { this.source = source }` with `new App(new Source())` is now covered. Local helper aliases, simple reassignments, simple factory-returned constructor helpers, factory-local helper aliases, and same-class conditional branch aliases are covered. Broader dependency-injection object-shape variants remain unaudited, including higher-order factories and framework-specific injection containers.
+- Untyped JavaScript constructor-parameter injection for direct constructor calls such as `constructor(source) { this.source = source }` with `new App(new Source())` is now covered. Local helper aliases, simple reassignments, simple factory-returned constructor helpers, factory-local helper aliases, arrow-function factories, and same-class conditional branch aliases are covered. Broader dependency-injection object-shape variants remain unaudited, including higher-order factories and framework-specific injection containers.
 - PHP callback-body-sink syntax remains blocked by parser/AST lowering for anonymous and arrow functions: current dumps drop lambda parameters and sink call arguments, so the taint engine cannot follow the callback argument into `sink($value)`. PHP callback-return syntax remains covered.
 - Do not claim full Semgrep Pro parity until a requirement-by-requirement audit proves it.
 
@@ -709,9 +712,9 @@ Next resume point: continue auditing language-specific class-field edge cases or
 
 ---
 
-## Latest Session Update: JavaScript Factory Local Aliases Green
+## Latest Session Update: JavaScript Arrow Factories Green
 
-Untyped JavaScript constructor-parameter helper instances now work when a constructor stores a parameter into an instance field and a call site supplies a helper instance directly, through a local alias, through a simple reassigned alias, through a simple factory function, through a factory-local helper alias, or through a same-class conditional branch alias.
+Untyped JavaScript constructor-parameter helper instances now work when a constructor stores a parameter into an instance field and a call site supplies a helper instance directly, through a local alias, through a simple reassigned alias, through a simple factory function, through a factory-local helper alias, through a variable-assigned arrow factory, or through a same-class conditional branch alias.
 
 - `src/tainting/Object_initialization.ml` records constructor assignments like `this.source = source` by parameter index.
 - When the same class is instantiated with `new App(new Source())`, object initialization now maps the stored field to the argument's constructor class.
@@ -719,6 +722,7 @@ Untyped JavaScript constructor-parameter helper instances now work when a constr
 - Simple object aliases now propagate mappings forward, so `const selected = helper; new App(selected)` keeps the `selected -> Source` shape.
 - Simple factory functions that directly return a constructor expression now record a return class, so `const helper = createSource(); new App(helper)` keeps the `helper -> Source` shape when `createSource()` returns `new Source()`.
 - Factory return analysis now tracks local constructor aliases before recording a return class, so `function createSource() { const helper = new Source(); return helper; }` keeps the `createSource() -> Source` shape.
+- Variable-assigned arrow functions now participate in the function-return prepass, so `const createSource = () => new Source(); const helper = createSource(); new App(helper)` keeps the `helper -> Source` shape.
 - Same-class conditional expressions now resolve object shapes recursively, so `const selected = condition() ? primary : fallback; new App(selected)` keeps the `selected -> Source` shape when both branches resolve to `Source`.
 - This reuses the existing nested `this.<field>.<method>()` call graph and taint-signature lookup support.
 - `cli/tests/default/e2e/rules/taint_interfile_js_constructor_parameter_instance.yaml` and `targets/taint_interfile_js_constructor_parameter_instance/` lock the regression.
@@ -726,6 +730,7 @@ Untyped JavaScript constructor-parameter helper instances now work when a constr
 - `cli/tests/default/e2e/rules/taint_interfile_js_constructor_parameter_reassigned_alias.yaml` and `targets/taint_interfile_js_constructor_parameter_reassigned_alias/` lock the reassigned-alias regression in isolation.
 - `cli/tests/default/e2e/rules/taint_interfile_js_constructor_parameter_factory.yaml` and `targets/taint_interfile_js_constructor_parameter_factory/` lock the simple factory-return regression in isolation.
 - `cli/tests/default/e2e/rules/taint_interfile_js_constructor_parameter_factory_local_alias.yaml` and `targets/taint_interfile_js_constructor_parameter_factory_local_alias/` lock the factory-local-alias regression in isolation.
+- `cli/tests/default/e2e/rules/taint_interfile_js_constructor_parameter_arrow_factory.yaml` and `targets/taint_interfile_js_constructor_parameter_arrow_factory/` lock the variable-assigned arrow-factory regression in isolation.
 - `cli/tests/default/e2e/rules/taint_interfile_js_constructor_parameter_branch_alias.yaml` and `targets/taint_interfile_js_constructor_parameter_branch_alias/` lock the same-class conditional branch regression in isolation.
 
 Red proof before the fix:
@@ -793,6 +798,19 @@ taint_interfile_js_constructor_parameter_factory_local_alias count=1 expected=1 
 rules.taint_interfile_js_constructor_parameter_factory_local_alias    targets/taint_interfile_js_constructor_parameter_factory_local_alias/app.js    9
 ```
 
+Arrow-factory red proof before the lambda factory fix:
+
+```text
+taint_interfile_js_constructor_parameter_arrow_factory count=0 expected=1 errors=0 interfile_lang_count=1
+```
+
+Arrow-factory green proof after the lambda factory fix:
+
+```text
+taint_interfile_js_constructor_parameter_arrow_factory count=1 expected=1 errors=0 interfile_lang_count=1
+rules.taint_interfile_js_constructor_parameter_arrow_factory    targets/taint_interfile_js_constructor_parameter_arrow_factory/app.js    9
+```
+
 Branch-alias red proof before the conditional object-shape fix:
 
 ```text
@@ -809,11 +827,11 @@ rules.taint_interfile_js_constructor_parameter_branch_alias    targets/taint_int
 Current verification after the fix:
 
 - Docker `make core` passes.
-- Full direct regression matrix passes, including `taint_interfile_js_constructor_parameter_instance count=1`, `taint_interfile_js_constructor_parameter_alias count=1`, `taint_interfile_js_constructor_parameter_reassigned_alias count=1`, `taint_interfile_js_constructor_parameter_factory count=1`, `taint_interfile_js_constructor_parameter_factory_local_alias count=1`, `taint_interfile_js_constructor_parameter_branch_alias count=1`, `taint_interfile_constructor_field_instance count=2`, `taint_interfile_class_field_instance count=2`, `taint_interfile_callback_body_language_matrix count=6`, `taint_interfile_language_matrix count=28`, `taint_interfile_parser_smoke count=13`, and `matrix_failures=0`.
+- Full direct regression matrix passes, including `taint_interfile_js_constructor_parameter_instance count=1`, `taint_interfile_js_constructor_parameter_alias count=1`, `taint_interfile_js_constructor_parameter_reassigned_alias count=1`, `taint_interfile_js_constructor_parameter_factory count=1`, `taint_interfile_js_constructor_parameter_factory_local_alias count=1`, `taint_interfile_js_constructor_parameter_arrow_factory count=1`, `taint_interfile_js_constructor_parameter_branch_alias count=1`, `taint_interfile_constructor_field_instance count=2`, `taint_interfile_class_field_instance count=2`, `taint_interfile_callback_body_language_matrix count=6`, `taint_interfile_language_matrix count=28`, `taint_interfile_parser_smoke count=13`, and `matrix_failures=0`.
 - `git diff --check` passes.
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
-Boundary note: direct constructor-argument object shapes, simple local helper aliases, simple alias reassignments, simple factory-returned constructor helpers, factory-local helper aliases, and same-class conditional branch aliases are covered. Broader dependency-injection forms remain unaudited, including higher-order factories and framework/container injection.
+Boundary note: direct constructor-argument object shapes, simple local helper aliases, simple alias reassignments, simple factory-returned constructor helpers, factory-local helper aliases, variable-assigned arrow factories, and same-class conditional branch aliases are covered. Broader dependency-injection forms remain unaudited, including higher-order factories and framework/container injection.
 
 Next resume point: continue auditing broader dependency-injection object-shape forms, language-specific class-field edge cases, or the PHP callback-body parser lowering boundary.
 
