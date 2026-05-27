@@ -189,6 +189,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let class_names = collect_class_names ast in
   let object_mappings = ref [] in
   let constructor_param_field_mappings = ref [] in
+  let function_return_mappings = ref [] in
   let class_name_from_type (type_ : G.type_) =
     match type_.G.t with
     | G.TyN name when is_known_class name class_names -> Some name
@@ -230,6 +231,33 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                | _ -> false)
         |> Option.map snd
     | _ -> None
+  in
+  let class_name_from_function_return expr =
+    match expr.G.e with
+    | G.Call ({ e = G.N (G.Id ((func_name, _), func_id_info)); _ }, _) ->
+        let func_resolved = !(func_id_info.G.id_resolved) in
+        !function_return_mappings
+        |> List.find_opt (fun (returning_func, _class_name) ->
+               match returning_func with
+               | G.Id ((returning_func_name, _), returning_func_id_info) ->
+                   String.equal returning_func_name func_name
+                   &&
+                   (match
+                      (func_resolved, !(returning_func_id_info.G.id_resolved))
+                    with
+                   | Some (_, sid1), Some (_, sid2) -> G.SId.equal sid1 sid2
+                   | _ -> true)
+               | _ -> false)
+        |> Option.map snd
+    | _ -> None
+  in
+  let class_name_from_expr expr =
+    match extract_class_name_from_constructor expr lang class_names with
+    | Some _ as class_name -> class_name
+    | None -> (
+        match class_name_from_object_mapping expr with
+        | Some _ as class_name -> class_name
+        | None -> class_name_from_function_return expr)
   in
   let record_constructor_param_field_mappings class_name fdef =
     let param_indexes =
@@ -292,20 +320,47 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                if mapping.class_name = class_name_str then
                  match constructor_arg_expr args mapping.param_index with
                  | Some arg_expr -> (
-                     let arg_class =
-                       match
-                         extract_class_name_from_constructor arg_expr lang
-                           class_names
-                       with
-                       | Some _ as class_name -> class_name
-                       | None -> class_name_from_object_mapping arg_expr
-                     in
-                     match arg_class with
+                     match class_name_from_expr arg_expr with
                      | Some arg_class ->
                          object_mappings :=
                            (mapping.field_name, arg_class) :: !object_mappings
                      | None -> ())
                  | None -> ())
+  in
+  let record_function_return_mapping func_name fdef =
+    let visitor =
+      object
+        inherit [_] G.iter as super
+
+        method! visit_stmt () stmt =
+          (match stmt.G.s with
+          | G.Return (_, Some return_expr, _) -> (
+              match
+                extract_class_name_from_constructor return_expr lang class_names
+              with
+              | Some class_name ->
+                  function_return_mappings :=
+                    (func_name, class_name) :: !function_return_mappings
+              | None -> ())
+          | _ -> ());
+          super#visit_stmt () stmt
+      end
+    in
+    visitor#visit_function_definition () fdef
+  in
+  let function_return_visitor =
+    object
+      inherit [_] G.iter as super
+
+      method! visit_definition () def =
+        (match def with
+        | entity, G.FuncDef fdef -> (
+            match entity.G.name with
+            | G.EN func_name -> record_function_return_mapping func_name fdef
+            | _ -> ())
+        | _ -> ());
+        super#visit_definition () def
+    end
   in
 
   let visitor =
@@ -331,14 +386,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
             | G.VarDef var_def -> (
                 match (entity.G.name, var_def.G.vinit) with
                 | G.EN var_name, Some init_expr -> (
-                    let class_name =
-                      match
-                        extract_class_name_from_constructor init_expr lang
-                          class_names
-                      with
-                      | Some _ as class_name -> class_name
-                      | None -> class_name_from_object_mapping init_expr
-                    in
+                    let class_name = class_name_from_expr init_expr in
                     let class_name =
                       match (class_name, lang) with
                       | Some cls, _ -> Some cls
@@ -404,12 +452,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                   | _ -> None
                 in
                 let class_name =
-                  match
-                    extract_class_name_from_constructor rval_expr lang
-                      class_names
-                  with
-                  | Some _ as class_name -> class_name
-                  | None -> class_name_from_object_mapping rval_expr
+                  class_name_from_expr rval_expr
                 in
                 match (var_name, class_name) with
                 | Some var, Some cls ->
@@ -443,14 +486,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | entity, G.VarDef var_def -> (
             match (entity.G.name, var_def.G.vinit) with
             | G.EN var_name, Some init_expr -> (
-                let class_name =
-                  match
-                    extract_class_name_from_constructor init_expr lang
-                      class_names
-                  with
-                  | Some _ as class_name -> class_name
-                  | None -> class_name_from_object_mapping init_expr
-                in
+                let class_name = class_name_from_expr init_expr in
                 match class_name with
                 | Some cls ->
                     object_mappings := (var_name, cls) :: !object_mappings
@@ -481,6 +517,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     end
   in
 
+  function_return_visitor#visit_program () ast;
   visitor#visit_program () ast;
   !object_mappings
 
