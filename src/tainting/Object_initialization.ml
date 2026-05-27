@@ -208,6 +208,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let constructor_param_field_mappings = ref [] in
   let function_return_mappings = ref [] in
   let function_alias_mappings = ref [] in
+  let object_property_factory_return_mappings = ref [] in
   let object_property_function_mappings = ref [] in
   let class_name_from_type (type_ : G.type_) =
     match type_.G.t with
@@ -297,13 +298,23 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let class_name_from_object_property_function_mapping callee_expr =
     match object_property_path_from_expr callee_expr with
     | Some (obj_name, field_path) ->
-        !object_property_function_mappings
-        |> List.find_opt (fun (mapped_obj, mapped_path, _func_name) ->
-               same_resolved_name obj_name mapped_obj
-               && same_resolved_path field_path mapped_path)
-        |> Option.map (fun (_obj_name, _field_path, func_name) ->
-               name_from_name_mapping function_return_mappings func_name)
-        |> Option.join
+        let class_name_from_direct_mapping =
+          !object_property_factory_return_mappings
+          |> List.find_opt (fun (mapped_obj, mapped_path, _class_name) ->
+                 same_resolved_name obj_name mapped_obj
+                 && same_resolved_path field_path mapped_path)
+          |> Option.map (fun (_obj_name, _field_path, class_name) -> class_name)
+        in
+        (match class_name_from_direct_mapping with
+        | Some _ as class_name -> class_name
+        | None ->
+            !object_property_function_mappings
+            |> List.find_opt (fun (mapped_obj, mapped_path, _func_name) ->
+                   same_resolved_name obj_name mapped_obj
+                   && same_resolved_path field_path mapped_path)
+            |> Option.map (fun (_obj_name, _field_path, func_name) ->
+                   name_from_name_mapping function_return_mappings func_name)
+            |> Option.join)
     | None -> None
   in
   let object_property_path_from_alias alias_name =
@@ -457,6 +468,23 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                      | None -> ())
                  | None -> ())
   in
+  let class_name_from_lambda_return fdef =
+    let class_name = ref None in
+    let visitor =
+      object
+        inherit [_] G.iter as super
+
+        method! visit_stmt () stmt =
+          (match (!class_name, stmt.G.s) with
+          | None, G.Return (_, Some return_expr, _) ->
+              class_name := class_name_from_expr return_expr
+          | _ -> ());
+          super#visit_stmt () stmt
+      end
+    in
+    visitor#visit_stmt () (AST_generic_helpers.funcbody_to_stmt fdef.G.fbody);
+    !class_name
+  in
   let record_object_property_mappings obj_name init_expr =
     match init_expr.G.e with
     | G.Record (_, fields, _) ->
@@ -494,6 +522,15 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                            (obj_name, field_path, func_name)
                            :: !object_property_function_mappings
                      | None -> ());
+                     (match field_init.G.e with
+                     | G.Lambda fdef -> (
+                         match class_name_from_lambda_return fdef with
+                         | Some class_name ->
+                             object_property_factory_return_mappings :=
+                               (obj_name, field_path, class_name)
+                               :: !object_property_factory_return_mappings
+                         | None -> ())
+                     | _ -> ());
                      match field_init.G.e with
                      | G.Record (_, nested_fields, _) ->
                          record_fields field_path nested_fields
