@@ -41,6 +41,7 @@
 - Typed callback flows are now covered for Java, Kotlin, and C# function/delegate parameters in both callback-return and callback-body-sink forms.
 - Callback-return flows are now covered across Ruby, Scala, Rust, Swift, PHP, Elixir, and Clojure syntax forms.
 - JavaScript and TypeScript class-field helper instances now resolve through both the call graph and taint signature lookup, so `this.source.getInput()` can consume a cross-file `Source#getInput` signature.
+- JavaScript and TypeScript constructor-assigned helper instances now resolve when constructors assign `this.source = new Source()` and later methods call `this.source.getInput()`.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -57,6 +58,7 @@
 - `164fb8debd063f55046f3c42be735fc544aca1b7` - `test: cover typed interfile callbacks` (unsigned for the same local signing issue)
 - `93d972c3e694399a0093379468455639181c6bd6` - `test: cover callback language matrix` (unsigned for the same local signing issue)
 - `166fe1048fe20eb9c03f3efe45281375d5a7e33d` - `fix: resolve class field instance calls` (unsigned for the same local signing issue)
+- `5bab44a727a835e290188e4ea302141d11f86ea9` - `fix: resolve constructor assigned instance calls` (unsigned for the same local signing issue)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -361,6 +363,7 @@ Verified in this handoff:
 - Focused direct scans passed for Java/Kotlin/C# typed callbacks and delegates.
 - Focused direct scans passed for callback-return syntax across Ruby, Scala, Rust, Swift, PHP, Elixir, and Clojure.
 - Focused direct scans passed for JavaScript and TypeScript class-field helper instances where `this.source.getInput()` calls a helper object initialized in a class field.
+- Focused direct scans passed for JavaScript and TypeScript constructor-assigned helper instances where `this.source = new Source()` is assigned in the constructor.
 - Direct probes passed for Java/Python/JavaScript override dispatch and multi-level inheritance.
 - Broad direct scans passed for `taint_interfile_language_matrix` with 28 findings and `taint_interfile_parser_smoke` with 13 findings.
 - `--dataflow-traces` on `taint_interfile_js` produced cross-file source, intermediate variable, and sink trace locations.
@@ -565,6 +568,39 @@ Current verification after the fix:
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
 Next resume point: continue auditing deeper framework-specific object construction forms, language-specific class-field edge cases, or callback-body-sink variants for the broader callback language matrix.
+
+---
+
+## Latest Session Update: Constructor-Assigned Helper Instances Green
+
+JavaScript and TypeScript constructor-assigned helper instances now work when constructors assign `this.<field> = new Helper()` and later methods call through that field.
+
+- `src/tainting/Object_initialization.ml` now records `this.field = new ClassName()` and `self.field = ClassName()` object-initialization mappings, complementing existing local-variable and class-field initializer mappings.
+- This reuses the nested `this.<field>.<method>()` call graph and signature lookup support from the class-field checkpoint above.
+- `cli/tests/default/e2e/rules/taint_interfile_constructor_field_instance.yaml` and `targets/taint_interfile_constructor_field_instance/` lock the JavaScript and TypeScript constructor-assignment regression.
+
+Red proof before the fix:
+
+```text
+taint_interfile_constructor_field_instance count=0 expected=2 errors=0 interfile_lang_count=2
+```
+
+Green proof after the fix:
+
+```text
+taint_interfile_constructor_field_instance count=2 expected=2 errors=0 interfile_lang_count=2
+rules.taint_interfile_constructor_field_instance_js    targets/taint_interfile_constructor_field_instance/javascript/app.js    9
+rules.taint_interfile_constructor_field_instance_ts    targets/taint_interfile_constructor_field_instance/typescript/app.ts    9
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes.
+- Full direct regression matrix passes, including `taint_interfile_constructor_field_instance count=2`, `taint_interfile_class_field_instance count=2`, `taint_interfile_static_field count=5`, `taint_interfile_callback_collision count=4`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+
+Next resume point: continue auditing deeper dependency-injection forms such as constructor parameters assigned to fields, language-specific class-field edge cases, or callback-body-sink variants for the broader callback language matrix.
 
 ---
 
