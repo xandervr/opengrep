@@ -434,6 +434,27 @@ let type_of_lval env lval =
       Typing.resolved_type_of_id_info env.taint_inst.lang fld.id_info
   | __else__ -> Type.NoType
 
+let unqualified_java_instance_field_lval env (lval : IL.lval) :
+    IL.lval option =
+  match lval.base with
+  | Var name
+    when env.taint_inst.lang =*= Lang.Java -> (
+      match !(name.id_info.id_resolved) with
+      | Some (G.EnclosedVar, _) ->
+          let field_offset = { o = Dot name; oorig = NoOrig } in
+          Some
+            {
+              base = VarSpecial (This, snd name.ident);
+              rev_offset = lval.rev_offset @ [ field_offset ];
+            }
+      | _ -> None)
+  | _ -> None
+
+let canonical_lval env (lval : IL.lval) : IL.lval =
+  match unqualified_java_instance_field_lval env lval with
+  | Some field_lval -> field_lval
+  | None -> lval
+
 let type_of_expr env e =
   match e.eorig with
   | SameAs eorig -> Typing.type_of_expr env.taint_inst.lang eorig |> fst
@@ -1204,8 +1225,9 @@ let imported_global_cell_of_lval env lval_env (lval : IL.lval) =
 
 let rec check_tainted_lval env (lval : IL.lval) :
     Taints.t * S.shape * [ `Sub of Taints.t * S.shape ] * Lval_env.t =
+  let data_lval = canonical_lval env lval in
   let new_taints, lval_in_env, lval_shape, sub, lval_env =
-    check_tainted_lval_aux env lval
+    check_tainted_lval_aux env data_lval
   in
   let taints_from_env = Xtaint.to_taints lval_in_env in
   let taints = Taints.union new_taints taints_from_env in
@@ -1370,7 +1392,14 @@ and check_tainted_lval_aux env (lval : IL.lval) :
             let xtaint', shape =
               (* THINK: Should we just use 'Sig.find_in_shape' directly here ?
                        We have the 'sub_shape' available. *)
-              match Lval_env.find_lval lval_env lval with
+              match
+                match Lval_env.find_lval lval_env lval with
+                | Some _ as result -> result
+                | None -> (
+                    match unqualified_java_instance_field_lval env lval with
+                    | Some field_lval -> Lval_env.find_lval lval_env field_lval
+                    | None -> None)
+              with
               | None -> (
                   match imported_global_cell_of_lval env lval_env lval with
                   | None -> (
@@ -2550,12 +2579,13 @@ let check_tainted_instr env instr : Taints.t * S.shape * Lval_env.t =
         in
         (* Generate ToLval effect for instance variable assignments when intrafile is enabled *)
         (if env.taint_inst.options.taint_intrafile then
-           match lval.base with
+           let effect_lval = canonical_lval env lval in
+           match effect_lval.base with
            | VarSpecial (Self, _)
            | VarSpecial (This, _)
              when not (Taints.is_empty taints) ->
                let offset =
-                 T.offset_of_rev_IL_offset ~rev_offset:lval.rev_offset
+                 T.offset_of_rev_IL_offset ~rev_offset:effect_lval.rev_offset
                in
                let taint_lval = { T.base = T.BThis; offset } in
                let effects = [ Effect.ToLval (taints, taint_lval) ] in
@@ -2940,10 +2970,12 @@ let rec transfer : env -> fun_cfg:F.fun_cfg -> Lval_env.t D.transfn =
         let lval_env' =
           match opt_lval with
           | Some lval ->
+              let tracked_lval = canonical_lval env lval in
               (* We call `check_tainted_lval` here because the assigned `lval`
                * itself could be annotated as a source of taint. *)
               let taints, lval_shape, _sub, lval_env' =
-                check_tainted_lval { env with lval_env = lval_env' } lval
+                check_tainted_lval { env with lval_env = lval_env' }
+                  tracked_lval
               in
               (* We check if the instruction is a sink, and if so the taints
                * from the `lval` could make a finding. *)
@@ -2954,17 +2986,18 @@ let rec transfer : env -> fun_cfg:F.fun_cfg -> Lval_env.t D.transfn =
         begin
           match opt_lval with
           | Some lval ->
+              let tracked_lval = canonical_lval env lval in
               if Shape.taints_and_shape_are_relevant taints shape then
                 (* Instruction returns tainted data, add taints to lval.
                  * See [Taint_lval_env] for details. *)
-                lval_env' |> Lval_env.add_lval_shape lval taints shape
+                lval_env' |> Lval_env.add_lval_shape tracked_lval taints shape
               else
                 (* The RHS returns no taint, but taint could propagate by
                  * side-effect too. So, we check whether the taint assigned
                  * to 'lval' has changed to determine whether we need to
                  * clean 'lval' or not. *)
                 let lval_taints_changed =
-                  not (Lval_env.equal_by_lval in' lval_env' lval)
+                  not (Lval_env.equal_by_lval in' lval_env' tracked_lval)
                 in
                 if lval_taints_changed then
                   (* The taint of 'lval' has changed, so there was a source or
@@ -2975,7 +3008,7 @@ let rec transfer : env -> fun_cfg:F.fun_cfg -> Lval_env.t D.transfn =
                   (* No side-effects on 'lval', and the instruction returns safe data,
                    * so we assume that the assigment acts as a sanitizer and therefore
                    * remove taints from lval. See [Taint_lval_env] for details. *)
-                  Lval_env.clean lval_env' lval
+                  Lval_env.clean lval_env' tracked_lval
           | None ->
               (* Instruction returns 'void' or its return value is ignored. *)
               lval_env'

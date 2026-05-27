@@ -49,8 +49,13 @@ let extract_param_labels_from_sink (sink_info : Effect.taints_to_sink) :
          | _ -> acc)
        []
 
-(* Extract this.x and self.x properties from a function definition *)
-let extract_method_properties (fdef : G.function_definition) :
+let java_implicit_this_property (expr : G.expr) id id_info : G.expr =
+  let tok = snd id in
+  let this_expr = { expr with G.e = G.IdSpecial (G.This, tok) } in
+  { expr with G.e = G.DotAccess (this_expr, tok, G.FN (G.Id (id, id_info))) }
+
+(* Extract this.x/self.x properties and Java implicit this fields from a method. *)
+let extract_method_properties ~(lang : Lang.t) (fdef : G.function_definition) :
     G.expr list =
   let found_properties = ref [] in
   let visitor =
@@ -59,6 +64,14 @@ let extract_method_properties (fdef : G.function_definition) :
 
       method! visit_expr () expr =
         (match expr.G.e with
+        | G.N (G.Id (id, id_info))
+          when Lang.equal lang Lang.Java -> (
+            match !(id_info.G.id_resolved) with
+            | Some (G.EnclosedVar, _) ->
+                found_properties :=
+                  java_implicit_this_property expr id id_info
+                  :: !found_properties
+            | _ -> ())
         | G.DotAccess (obj, _, G.FN (G.Id (_, _))) -> (
             (* Check if base object is IdSpecial This or Self *)
             match obj.G.e with

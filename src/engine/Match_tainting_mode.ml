@@ -540,6 +540,7 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
                           match fst fdef.fkind with
                           | Method ->
                               Taint_signature_extractor.extract_method_properties
+                                ~lang
                                 fdef
                           | Function
                           | LambdaKind

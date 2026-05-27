@@ -621,6 +621,26 @@ def test_interfile_taint_flows_through_inherited_constructors(
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_unqualified_java_fields(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_java_unqualified_field.yaml",
+        target_name="taint_interfile_java_unqualified_field",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = output["results"]
+
+    assert output["interfile_languages_used"] == ["Java"]
+    assert len(results) == 1
+    assert results[0]["check_id"] == "rules.taint_interfile_java_unqualified_field"
+    assert results[0]["path"] == "targets/taint_interfile_java_unqualified_field/App.java"
+    assert results[0]["start"]["line"] == 4
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_imported_python_module_value(
     run_semgrep_in_tmp: RunSemgrep,
 ):
