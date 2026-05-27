@@ -14,6 +14,12 @@ module G = AST_generic
 (* Object mapping: variable -> class *)
 type object_mapping = G.name * G.name
 
+type constructor_param_field_mapping = {
+  class_name : string;
+  field_name : G.name;
+  param_index : int;
+}
+
 (* Matcher type: extracts class name from constructor expression *)
 type matcher = G.expr -> G.name list -> G.name option
 
@@ -33,6 +39,10 @@ let is_known_class (name : G.name) (class_names : G.name list) : bool =
 (* Check if string starts with uppercase *)
 let is_uppercase_start str =
   String.length str > 0 && Char.uppercase_ascii str.[0] = str.[0]
+
+let string_of_name = function
+  | G.Id ((name, _), _) -> Some name
+  | G.IdQualified { name_last = ((name, _), _); _ } -> Some name
 
 (* Matcher: new ClassName(args) - basic form *)
 let match_new_basic rval_expr class_names =
@@ -178,6 +188,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     object_mapping list =
   let class_names = collect_class_names ast in
   let object_mappings = ref [] in
+  let constructor_param_field_mappings = ref [] in
   let class_name_from_type (type_ : G.type_) =
     match type_.G.t with
     | G.TyN name when is_known_class name class_names -> Some name
@@ -190,10 +201,106 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | G.KeywordAttr ((G.Public | G.Private | G.Protected | G.Const), _) -> true
     | _ -> false
   in
+  let is_constructor_name func_name class_name =
+    let config = Lang_config.get lang in
+    List.mem func_name config.constructor_names || func_name = class_name
+  in
+  let constructor_arg_expr args index =
+    let positional_args =
+      args
+      |> List.filter_map (function
+           | G.Arg expr -> Some expr
+           | _ -> None)
+    in
+    List.nth_opt positional_args index
+  in
+  let record_constructor_param_field_mappings class_name fdef =
+    let param_indexes =
+      Tok.unbracket fdef.G.fparams
+      |> List.mapi (fun index -> function
+           | G.Param { G.pname = Some ((param_name, _)); _ } ->
+               Some (param_name, index)
+           | _ -> None)
+      |> List.filter_map Fun.id
+    in
+    let param_index param_name = List.assoc_opt param_name param_indexes in
+    let visitor =
+      object
+        inherit [_] G.iter as super
+
+        method! visit_expr () expr =
+          (match expr.G.e with
+          | G.Assign
+              ( { e =
+                    G.DotAccess
+                      ( { e = G.IdSpecial ((G.This | G.Self), _); _ },
+                        _,
+                        G.FN (G.Id _ as field_name) );
+                  _ },
+                _,
+                { e = G.N (G.Id ((param_name, _), _)); _ } ) -> (
+              match param_index param_name with
+              | Some index ->
+                  constructor_param_field_mappings :=
+                    { class_name; field_name; param_index = index }
+                    :: !constructor_param_field_mappings
+              | None -> ())
+          | _ -> ());
+          super#visit_expr () expr
+      end
+    in
+    visitor#visit_function_definition () fdef
+  in
+  let record_class_constructor_param_field_mappings class_name class_def =
+    let class_name_str = string_of_name class_name in
+    match class_name_str with
+    | None -> ()
+    | Some class_name_str ->
+        Tok.unbracket class_def.G.cbody
+        |> List.iter (function
+             | G.F { G.s = G.DefStmt (entity, G.FuncDef fdef); _ } -> (
+                 match entity.G.name with
+                 | G.EN (G.Id ((func_name, _), _))
+                   when is_constructor_name func_name class_name_str ->
+                     record_constructor_param_field_mappings class_name_str fdef
+                 | _ -> ())
+             | _ -> ())
+  in
+  let record_constructor_argument_mappings class_name args =
+    match string_of_name class_name with
+    | None -> ()
+    | Some class_name_str ->
+        !constructor_param_field_mappings
+        |> List.iter (fun mapping ->
+               if mapping.class_name = class_name_str then
+                 match constructor_arg_expr args mapping.param_index with
+                 | Some arg_expr -> (
+                     match
+                       extract_class_name_from_constructor arg_expr lang
+                         class_names
+                     with
+                     | Some arg_class ->
+                         object_mappings :=
+                           (mapping.field_name, arg_class) :: !object_mappings
+                     | None -> ())
+                 | None -> ())
+  in
 
   let visitor =
     object
       inherit [_] G.iter as super
+
+      method! visit_expr () expr =
+        (match expr.G.e with
+        | G.New (_, class_type, _, args) -> (
+            match class_type.G.t with
+            | G.TyN class_name
+            | G.TyExpr { G.e = G.N class_name; _ } ->
+                record_constructor_argument_mappings class_name
+                  (Tok.unbracket args)
+            | _ -> ())
+        | _ -> ());
+        super#visit_expr () expr
 
       method! visit_stmt () stmt =
         (match stmt.G.s with
@@ -296,6 +403,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
 
       method! visit_definition () def =
         (match def with
+        | entity, G.ClassDef class_def -> (
+            match entity.G.name with
+            | G.EN class_name ->
+                record_class_constructor_param_field_mappings class_name
+                  class_def
+            | _ -> ())
         | entity, G.VarDef var_def -> (
             match (entity.G.name, var_def.G.vinit) with
             | G.EN var_name, Some init_expr -> (
