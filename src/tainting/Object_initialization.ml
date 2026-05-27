@@ -220,11 +220,11 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     in
     List.nth_opt positional_args index
   in
-  let class_name_from_object_mapping expr =
+  let class_name_from_mapping mappings expr =
     match expr.G.e with
     | G.N (G.Id ((arg_name, _), arg_id_info)) ->
         let arg_resolved = !(arg_id_info.G.id_resolved) in
-        !object_mappings
+        !mappings
         |> List.find_opt (fun (var_name, _class_name) ->
                match var_name with
                | G.Id ((var_name, _), var_id_info) ->
@@ -236,6 +236,9 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                | _ -> false)
         |> Option.map snd
     | _ -> None
+  in
+  let class_name_from_object_mapping expr =
+    class_name_from_mapping object_mappings expr
   in
   let class_name_from_function_return expr =
     match expr.G.e with
@@ -345,16 +348,50 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                  | None -> ())
   in
   let record_function_return_mapping func_name fdef =
+    let local_object_mappings = ref [] in
+    let rec class_name_from_return_expr expr =
+      match extract_class_name_from_constructor expr lang class_names with
+      | Some _ as class_name -> class_name
+      | None -> (
+          match class_name_from_mapping local_object_mappings expr with
+          | Some _ as class_name -> class_name
+          | None -> (
+              match class_name_from_function_return expr with
+              | Some _ as class_name -> class_name
+              | None -> class_name_from_return_conditional_expr expr))
+    and class_name_from_return_conditional_expr expr =
+      match expr.G.e with
+      | G.Conditional (_condition, then_expr, else_expr) -> (
+          match
+            ( class_name_from_return_expr then_expr,
+              class_name_from_return_expr else_expr )
+          with
+          | Some then_class, Some else_class when same_name then_class else_class
+            ->
+              Some then_class
+          | _ -> None)
+      | _ -> None
+    in
+    let record_local_object_mapping var_name init_expr =
+      match class_name_from_return_expr init_expr with
+      | Some class_name ->
+          local_object_mappings := (var_name, class_name) :: !local_object_mappings
+      | None -> ()
+    in
     let visitor =
       object
         inherit [_] G.iter as super
 
         method! visit_stmt () stmt =
           (match stmt.G.s with
+          | G.DefStmt (entity, G.VarDef { G.vinit = Some init_expr; _ }) -> (
+              match entity.G.name with
+              | G.EN var_name -> record_local_object_mapping var_name init_expr
+              | _ -> ())
+          | G.ExprStmt ({ G.e = G.Assign ({ G.e = G.N var_name; _ }, _, rval_expr); _ }, _) ->
+              record_local_object_mapping var_name rval_expr
           | G.Return (_, Some return_expr, _) -> (
-              match
-                extract_class_name_from_constructor return_expr lang class_names
-              with
+              match class_name_from_return_expr return_expr with
               | Some class_name ->
                   function_return_mappings :=
                     (func_name, class_name) :: !function_return_mappings
