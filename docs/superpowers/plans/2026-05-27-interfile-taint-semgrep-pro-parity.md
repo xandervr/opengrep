@@ -36,6 +36,7 @@
 - Java unqualified instance-field access now canonicalizes `EnclosedVar` lvalues as implicit `this.<field>` for interfile signatures and local dataflow. This keeps `return value` aligned with constructor assignments to `this.value`.
 - C# and Kotlin unqualified instance-field flows now use the same implicit receiver canonicalization. Kotlin class `init` blocks and field initializers are modeled as synthetic `Class:<name>` initializer signatures so `Helper()` applies `this.<field>` effects to the constructed receiver.
 - Static class-field flows now propagate for Java and C# qualified/unqualified static field reads and JavaScript qualified static field reads.
+- Higher-order callback flows are now covered for JavaScript and Python when a cross-file helper calls a callback with tainted data and either returns the callback result or lets the callback body report the sink.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -47,6 +48,7 @@
 - `5520f09144759c58ceeae51a596a58cb2ec0b62f` - `fix: track unqualified java instance fields`
 - `417d3b881d99608389b6de341746b66a972134b1` - `fix: resolve unqualified class fields across languages` (unsigned: local 1Password SSH signing and private-key fallback were blocked in this session)
 - `9ef5934fe` - `fix: propagate static class fields` (unsigned for the same local signing issue)
+- `3f20a1c50aa0a0c422c7a8db691625bc0584c6e9` - `test: cover interfile callback taint flows` (unsigned for the same local signing issue)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -77,7 +79,7 @@ The Docker-built help text now says:
 1. Re-run the Docker direct scan matrix from Task 4 after any further engine change.
 2. Keep `git diff --check` and `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` green.
 3. Continue auditing remaining Semgrep Pro parity gaps beyond the covered import/value/export/object/trace/inheritance cases.
-4. Audit remaining class-field and dispatch gaps before making any broad class-field parity claim: higher-order callback flows, framework-specific object construction, and language-specific class-field edge cases.
+4. Audit remaining class-field and dispatch gaps before making any broad class-field parity claim: framework-specific object construction, language-specific class-field edge cases, and callback/import path collision hardening.
 
 Latest side-effect sanitizer verification:
 
@@ -160,6 +162,18 @@ rules.taint_interfile_static_field_java    targets/taint_interfile_static_field/
 rules.taint_interfile_static_field_java    targets/taint_interfile_static_field/java_unqualified/App.java    3
 rules.taint_interfile_static_field_js    targets/taint_interfile_static_field/javascript/app.js    4
 ```
+
+Latest callback green proof after `3f20a1c50`:
+
+```text
+taint_interfile_callback count=4 expected=4 errors=0 interfile_lang_count=2
+rules.taint_interfile_callback_js    targets/taint_interfile_callback/javascript_return/app.js    3
+rules.taint_interfile_callback_js    targets/taint_interfile_callback/javascript_sink/app.js    3
+rules.taint_interfile_callback_python    targets/taint_interfile_callback/python_return/app.py    3
+rules.taint_interfile_callback_python    targets/taint_interfile_callback/python_sink/app.py    3
+```
+
+Callback audit note: the first combined probe reused `source`/`apply` helper names across sibling fixtures and returned no findings because those duplicate relative-module names were ambiguous. The committed regression uses unique helper names to lock the callback behavior itself. Treat callback/import path collision hardening as a separate parity gap.
 
 Override and multi-level inheritance audit probes after `9ef5934fe`:
 
@@ -291,6 +305,7 @@ Verified in this handoff:
 - Focused direct scans passed for Java unqualified instance-field access through inherited constructor state.
 - Focused direct scans passed for C# and Kotlin unqualified instance-field access through constructor/class-init state.
 - Focused direct scans passed for Java/C#/JavaScript static class-field state.
+- Focused direct scans passed for JavaScript/Python higher-order callback flows where tainted data is passed into a callback and either returned or sunk inside the callback body.
 - Direct probes passed for Java/Python/JavaScript override dispatch and multi-level inheritance.
 - Broad direct scans passed for `taint_interfile_language_matrix` with 28 findings and `taint_interfile_parser_smoke` with 13 findings.
 - `--dataflow-traces` on `taint_interfile_js` produced cross-file source, intermediate variable, and sink trace locations.
@@ -336,7 +351,36 @@ Current verification after the fix:
 
 Known static-field boundary: JavaScript unqualified `return value` from a static method remains unsupported, which matches JavaScript runtime semantics because class static fields must be read through the class or `this`.
 
-Next resume point: continue auditing higher-order callback flows and framework/language-specific object construction gaps.
+Next resume point: callback coverage is recorded below; continue with callback/import path collision hardening or framework-specific object construction gaps.
+
+---
+
+## Latest Session Update: Callback Coverage Green
+
+Higher-order callback flows are now locked by e2e coverage for JavaScript and Python.
+
+- `cli/tests/default/e2e/rules/taint_interfile_callback.yaml` covers JavaScript and Python callback flows with `options: { interfile: true }`.
+- `targets/taint_interfile_callback/javascript_return/` and `python_return/` cover helpers that call a callback with tainted data and return the callback result to a sink.
+- `targets/taint_interfile_callback/javascript_sink/` and `python_sink/` cover helpers that call a callback with tainted data and rely on the callback body to call the sink.
+- The fixture intentionally uses unique helper names per variant because duplicate relative-module names in the same scan produced ambiguous callback resolution. Keep that as a separate import-path hardening gap rather than conflating it with callback-return behavior.
+
+Current targeted scan:
+
+```text
+taint_interfile_callback count=4 expected=4 errors=0 interfile_lang_count=2
+rules.taint_interfile_callback_js    targets/taint_interfile_callback/javascript_return/app.js    3
+rules.taint_interfile_callback_js    targets/taint_interfile_callback/javascript_sink/app.js    3
+rules.taint_interfile_callback_python    targets/taint_interfile_callback/python_return/app.py    3
+rules.taint_interfile_callback_python    targets/taint_interfile_callback/python_sink/app.py    3
+```
+
+Current verification after the coverage checkpoint:
+
+- Docker direct callback scan passes with 4 findings.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+
+Next resume point: audit callback/import path collision hardening or move to framework-specific object construction gaps.
 
 ---
 
