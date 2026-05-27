@@ -204,6 +204,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let class_names = collect_class_names ast in
   let object_mappings = ref [] in
   let object_property_mappings = ref [] in
+  let object_property_alias_mappings = ref [] in
   let constructor_param_field_mappings = ref [] in
   let function_return_mappings = ref [] in
   let function_alias_mappings = ref [] in
@@ -291,6 +292,21 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
            same_resolved_name obj_name mapped_obj
            && same_resolved_path [ field_name ] mapped_path)
     |> Option.map (fun (_obj_name, _field_path, class_name) -> class_name)
+  in
+  let object_property_path_from_alias alias_name =
+    let rec aux seen alias_name =
+      if List.exists (same_resolved_name alias_name) seen then None
+      else
+        !object_property_alias_mappings
+        |> List.find_opt (fun (mapped_alias, _obj_name, _field_path) ->
+               same_resolved_name alias_name mapped_alias)
+        |> Option.map (fun (_mapped_alias, obj_name, field_path) ->
+               match aux (alias_name :: seen) obj_name with
+               | Some (root_obj_name, root_field_path) ->
+                   (root_obj_name, root_field_path @ field_path)
+               | None -> (obj_name, field_path))
+    in
+    aux [] alias_name
   in
   let class_name_from_function_return expr =
     match name_from_called_function function_return_mappings expr with
@@ -484,8 +500,21 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     match (object_property_path_from_expr lval_expr, class_name_from_expr rval_expr) with
     | Some (obj_name, field_path), Some class_name ->
         object_property_mappings :=
-          (obj_name, field_path, class_name) :: !object_property_mappings
+          (obj_name, field_path, class_name) :: !object_property_mappings;
+        (match object_property_path_from_alias obj_name with
+        | Some (root_obj_name, root_field_path) ->
+            object_property_mappings :=
+              (root_obj_name, root_field_path @ field_path, class_name)
+              :: !object_property_mappings
+        | None -> ())
     | _ -> ()
+  in
+  let record_object_property_alias_mapping alias_name init_expr =
+    match object_property_path_from_expr init_expr with
+    | Some (obj_name, field_path) ->
+        object_property_alias_mappings :=
+          (alias_name, obj_name, field_path) :: !object_property_alias_mappings
+    | None -> ()
   in
   let record_destructured_object_property_mappings init_expr =
     let local_name_from_field_init field_name = function
@@ -674,6 +703,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                 match (entity.G.name, var_def.G.vinit) with
                 | G.EN var_name, Some init_expr -> (
                     record_object_property_mappings var_name init_expr;
+                    record_object_property_alias_mapping var_name init_expr;
                     record_destructured_object_property_mappings init_expr;
                     record_function_alias_mapping var_name init_expr;
                     let class_name = class_name_from_expr init_expr in
@@ -719,6 +749,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                 (match lval_expr.G.e with
                 | G.N alias_name ->
                     record_object_property_mappings alias_name rval_expr;
+                    record_object_property_alias_mapping alias_name rval_expr;
                     record_function_alias_mapping alias_name rval_expr
                 | _ -> ());
                 let var_name =
@@ -783,6 +814,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
             match (entity.G.name, var_def.G.vinit) with
             | G.EN var_name, Some init_expr -> (
                 record_object_property_mappings var_name init_expr;
+                record_object_property_alias_mapping var_name init_expr;
                 record_destructured_object_property_mappings init_expr;
                 record_function_alias_mapping var_name init_expr;
                 let class_name = class_name_from_expr init_expr in
