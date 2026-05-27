@@ -44,6 +44,7 @@
 - JavaScript and TypeScript constructor-assigned helper instances now resolve when constructors assign `this.source = new Source()` and later methods call `this.source.getInput()`.
 - TypeScript constructor parameter properties now resolve when a typed parameter property such as `constructor(private source: Source)` is later used through `this.source.getInput()`.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
+- JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()` into `new App(...)`.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -63,6 +64,8 @@
 - `5bab44a727a835e290188e4ea302141d11f86ea9` - `fix: resolve constructor assigned instance calls` (unsigned for the same local signing issue)
 - `36b5e3ad9bb957cacfba63c1eab9adc63dec7e44` - `fix: resolve typescript parameter properties` (unsigned for the same local signing issue)
 - `a49884fa48965b0c17945d1ddeaa1045d2863859` - `test: cover callback body language matrix` (unsigned for the same local signing issue)
+- `85d614ba757365a04f22fb2b112907fd7a4a94fa` - `docs: record callback body matrix checkpoint` (unsigned for the same local signing issue)
+- `123748e9f555f615489927d055dc701bfb12ffc4` - `fix: resolve javascript constructor parameter instances` (unsigned for the same local signing issue)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -370,6 +373,7 @@ Verified in this handoff:
 - Focused direct scans passed for JavaScript and TypeScript constructor-assigned helper instances where `this.source = new Source()` is assigned in the constructor.
 - Focused direct scans passed for TypeScript constructor parameter properties with typed helper fields.
 - Focused direct scans passed for callback-body-sink syntax across Ruby, Scala, Rust, Swift, Elixir, and Clojure.
+- Focused direct scans passed for untyped JavaScript constructor-parameter helper instances where `this.source = source` and `new App(new Source())` supplies the helper object.
 - Direct probes passed for Java/Python/JavaScript override dispatch and multi-level inheritance.
 - Broad direct scans passed for `taint_interfile_language_matrix` with 28 findings and `taint_interfile_parser_smoke` with 13 findings.
 - `--dataflow-traces` on `taint_interfile_js` produced cross-file source, intermediate variable, and sink trace locations.
@@ -379,7 +383,7 @@ Verified in this handoff:
 
 Known boundaries:
 - `generic` and `regex` are extended non-AST analyzers, not parser-backed target languages. Taint mode now rejects them with a structured `SemgrepError` and CLI help documents that they do not support taint mode.
-- Untyped JavaScript constructor-parameter injection, such as `constructor(source) { this.source = source }` with `new App(new Source())`, remains a dynamic object-shape inference gap. Java, C#, and explicit typed TypeScript constructor assignment probes are already green; TypeScript parameter-property syntax is covered by the latest checkpoint.
+- Untyped JavaScript constructor-parameter injection for direct constructor calls such as `constructor(source) { this.source = source }` with `new App(new Source())` is now covered. Broader dependency-injection object-shape variants remain unaudited, including factory-produced constructor arguments, alias-heavy argument flows, and framework-specific injection containers.
 - PHP callback-body-sink syntax remains blocked by parser/AST lowering for anonymous and arrow functions: current dumps drop lambda parameters and sink call arguments, so the taint engine cannot follow the callback argument into `sink($value)`. PHP callback-return syntax remains covered.
 - Do not claim full Semgrep Pro parity until a requirement-by-requirement audit proves it.
 
@@ -640,9 +644,9 @@ Current verification after the fix:
 - `git diff --check` passes.
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
-Boundary note: untyped JavaScript constructor-parameter injection remains open because it requires dynamic object-shape inference from call-site constructor arguments. Direct probes showed Java and C# constructor-parameter assignment are green, and explicit typed TypeScript constructor assignment is green.
+Follow-up note: this covers typed TypeScript parameter properties. Untyped JavaScript constructor arguments are handled by the later JavaScript constructor-parameter checkpoint.
 
-Next resume point: audit callback-body-sink variants for the broader callback language matrix, more language-specific class-field edge cases, or decide whether to model untyped JavaScript constructor-argument object shapes.
+Next resume point: audit callback-body-sink variants for the broader callback language matrix or more language-specific class-field edge cases.
 
 ---
 
@@ -675,7 +679,42 @@ Current verification after the coverage checkpoint:
 
 Boundary note: PHP callback-body-sink syntax is not included because current PHP AST dumps for `function($value) { sink($value); }` and `fn($value) => sink($value)` drop both lambda parameters and sink call arguments. PHP callback-return syntax remains covered by `taint_interfile_callback_language_matrix`.
 
-Next resume point: continue auditing language-specific class-field edge cases, decide whether to model untyped JavaScript constructor-argument object shapes, or investigate the PHP parser lowering gap separately from taint propagation.
+Next resume point: continue auditing language-specific class-field edge cases or investigate the PHP parser lowering gap separately from taint propagation.
+
+---
+
+## Latest Session Update: JavaScript Constructor Parameter Instances Green
+
+Untyped JavaScript constructor-parameter helper instances now work when a constructor stores a parameter into an instance field and a call site supplies a helper instance.
+
+- `src/tainting/Object_initialization.ml` records constructor assignments like `this.source = source` by parameter index.
+- When the same class is instantiated with `new App(new Source())`, object initialization now maps the stored field to the argument's constructor class.
+- This reuses the existing nested `this.<field>.<method>()` call graph and taint-signature lookup support.
+- `cli/tests/default/e2e/rules/taint_interfile_js_constructor_parameter_instance.yaml` and `targets/taint_interfile_js_constructor_parameter_instance/` lock the regression.
+
+Red proof before the fix:
+
+```text
+taint_interfile_js_constructor_parameter_instance count=0 expected=1 errors=0 interfile_lang_count=1
+```
+
+Green proof after the fix:
+
+```text
+taint_interfile_js_constructor_parameter_instance count=1 expected=1 errors=0 interfile_lang_count=1
+rules.taint_interfile_js_constructor_parameter_instance    targets/taint_interfile_js_constructor_parameter_instance/app.js    9
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes.
+- Full direct regression matrix passes, including `taint_interfile_js_constructor_parameter_instance count=1`, `taint_interfile_constructor_field_instance count=2`, `taint_interfile_class_field_instance count=2`, `taint_interfile_callback_body_language_matrix count=6`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+
+Boundary note: direct constructor-argument object shapes are covered. Broader dependency-injection forms remain unaudited, including factory-returned constructor arguments, aliases flowing into constructor calls, and framework/container injection.
+
+Next resume point: continue auditing broader dependency-injection object-shape forms, language-specific class-field edge cases, or the PHP callback-body parser lowering boundary.
 
 ---
 
