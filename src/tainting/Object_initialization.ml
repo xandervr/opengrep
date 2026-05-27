@@ -178,6 +178,18 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     object_mapping list =
   let class_names = collect_class_names ast in
   let object_mappings = ref [] in
+  let class_name_from_type (type_ : G.type_) =
+    match type_.G.t with
+    | G.TyN name when is_known_class name class_names -> Some name
+    | G.TyExpr { G.e = G.N (G.Id _ as name); _ }
+      when is_known_class name class_names ->
+        Some name
+    | _ -> None
+  in
+  let is_parameter_property_attr = function
+    | G.KeywordAttr ((G.Public | G.Private | G.Protected | G.Const), _) -> true
+    | _ -> false
+  in
 
   let visitor =
     object
@@ -295,6 +307,26 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                     object_mappings := (var_name, cls) :: !object_mappings
                 | _ -> ())
             | _ -> ())
+        | _, G.FuncDef fdef ->
+            Tok.unbracket fdef.G.fparams
+            |> List.iter (function
+                 | G.Param
+                     {
+                       G.pname = Some ((param_name, param_tok));
+                       ptype = Some param_type;
+                       pattrs;
+                       pinfo;
+                       _;
+                     }
+                   when List.exists is_parameter_property_attr pattrs -> (
+                     match class_name_from_type param_type with
+                     | Some cls ->
+                         let field_name =
+                           G.Id ((param_name, param_tok), pinfo)
+                         in
+                         object_mappings := (field_name, cls) :: !object_mappings
+                     | None -> ())
+                 | _ -> ())
         | _ -> ());
         super#visit_definition () def
     end
