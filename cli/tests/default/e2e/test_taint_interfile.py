@@ -800,6 +800,57 @@ def test_interfile_taint_keeps_callback_imports_path_qualified(
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_typed_callbacks(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_typed_callback.yaml",
+        target_name="taint_interfile_typed_callback",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = output["results"]
+
+    assert set(output["interfile_languages_used"]) == {"C#", "Java", "Kotlin"}
+    assert {
+        (result["check_id"], result["path"], result["start"]["line"])
+        for result in results
+    } == {
+        (
+            "rules.taint_interfile_typed_callback_java",
+            "targets/taint_interfile_typed_callback/java_return/AppReturn.java",
+            3,
+        ),
+        (
+            "rules.taint_interfile_typed_callback_java",
+            "targets/taint_interfile_typed_callback/java_sink/AppSink.java",
+            3,
+        ),
+        (
+            "rules.taint_interfile_typed_callback_kotlin",
+            "targets/taint_interfile_typed_callback/kotlin_return/app.kt",
+            2,
+        ),
+        (
+            "rules.taint_interfile_typed_callback_kotlin",
+            "targets/taint_interfile_typed_callback/kotlin_sink/app.kt",
+            2,
+        ),
+        (
+            "rules.taint_interfile_typed_callback_csharp",
+            "targets/taint_interfile_typed_callback/csharp_return/AppReturn.cs",
+            3,
+        ),
+        (
+            "rules.taint_interfile_typed_callback_csharp",
+            "targets/taint_interfile_typed_callback/csharp_sink/AppSink.cs",
+            3,
+        ),
+    }
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_imported_python_module_value(
     run_semgrep_in_tmp: RunSemgrep,
 ):

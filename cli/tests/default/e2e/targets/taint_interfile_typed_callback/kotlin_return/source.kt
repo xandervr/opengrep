@@ -1,0 +1,1 @@
+fun sourceReturn(): String = "tainted"
