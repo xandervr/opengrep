@@ -1,0 +1,77 @@
+rules:
+  - id: taint_interfile_callback_matrix_ruby
+    mode: taint
+    languages: [ruby]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile callback matrix taint
+    severity: WARNING
+
+  - id: taint_interfile_callback_matrix_scala
+    mode: taint
+    languages: [scala]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile callback matrix taint
+    severity: WARNING
+
+  - id: taint_interfile_callback_matrix_rust
+    mode: taint
+    languages: [rust]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile callback matrix taint
+    severity: WARNING
+
+  - id: taint_interfile_callback_matrix_swift
+    mode: taint
+    languages: [swift]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile callback matrix taint
+    severity: WARNING
+
+  - id: taint_interfile_callback_matrix_php
+    mode: taint
+    languages: [php]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile callback matrix taint
+    severity: WARNING
+
+  - id: taint_interfile_callback_matrix_elixir
+    mode: taint
+    languages: [elixir]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile callback matrix taint
+    severity: WARNING
+
+  - id: taint_interfile_callback_matrix_clojure
+    mode: taint
+    languages: [clojure]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: (source)
+    pattern-sinks:
+      - pattern: (sink ...)
+    message: interfile callback matrix taint
+    severity: WARNING

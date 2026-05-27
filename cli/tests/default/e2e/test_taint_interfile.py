@@ -851,6 +851,70 @@ def test_interfile_taint_flows_through_typed_callbacks(
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_callback_language_matrix(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_callback_language_matrix.yaml",
+        target_name="taint_interfile_callback_language_matrix",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = output["results"]
+
+    assert set(output["interfile_languages_used"]) == {
+        "Clojure",
+        "Elixir",
+        "PHP",
+        "Ruby",
+        "Rust",
+        "Scala",
+        "Swift",
+    }
+    assert {
+        (result["check_id"], result["path"], result["start"]["line"])
+        for result in results
+    } == {
+        (
+            "rules.taint_interfile_callback_matrix_ruby",
+            "targets/taint_interfile_callback_language_matrix/ruby/app.rb",
+            2,
+        ),
+        (
+            "rules.taint_interfile_callback_matrix_scala",
+            "targets/taint_interfile_callback_language_matrix/scala/App.scala",
+            1,
+        ),
+        (
+            "rules.taint_interfile_callback_matrix_rust",
+            "targets/taint_interfile_callback_language_matrix/rust/app.rs",
+            1,
+        ),
+        (
+            "rules.taint_interfile_callback_matrix_swift",
+            "targets/taint_interfile_callback_language_matrix/swift/app.swift",
+            1,
+        ),
+        (
+            "rules.taint_interfile_callback_matrix_php",
+            "targets/taint_interfile_callback_language_matrix/php/app.php",
+            3,
+        ),
+        (
+            "rules.taint_interfile_callback_matrix_elixir",
+            "targets/taint_interfile_callback_language_matrix/elixir/app.ex",
+            2,
+        ),
+        (
+            "rules.taint_interfile_callback_matrix_clojure",
+            "targets/taint_interfile_callback_language_matrix/clojure/app.clj",
+            1,
+        ),
+    }
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_imported_python_module_value(
     run_semgrep_in_tmp: RunSemgrep,
 ):
