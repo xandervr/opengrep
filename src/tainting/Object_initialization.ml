@@ -425,6 +425,14 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let record_object_property_mappings obj_name init_expr =
     match init_expr.G.e with
     | G.Record (_, fields, _) ->
+        let copy_spread_properties source_name =
+          !object_property_mappings
+          |> List.iter (fun (mapped_obj, mapped_path, class_name) ->
+                 if same_resolved_name source_name mapped_obj then
+                   object_property_mappings :=
+                     (obj_name, mapped_path, class_name)
+                     :: !object_property_mappings)
+        in
         let rec record_fields field_path fields =
           fields
           |> List.iter (function
@@ -450,6 +458,23 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                          record_fields field_path nested_fields
                      | _ -> ())
                  | _ -> ())
+             | G.F
+                 {
+                   G.s =
+                     G.ExprStmt
+                       ( {
+                           G.e =
+                             G.Call
+                               ( { G.e = G.IdSpecial (G.Spread, _); _ },
+                                 ( _,
+                                   [ G.Arg { G.e = G.N source_name; _ } ],
+                                   _ ) );
+                           _;
+                         },
+                         _ );
+                   _;
+                 } ->
+                 copy_spread_properties source_name
              | _ -> ())
         in
         record_fields [] fields
