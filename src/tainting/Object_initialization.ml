@@ -235,6 +235,11 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                 let var_name =
                   match lval_expr.G.e with
                   | G.N name -> Some name
+                  | G.DotAccess
+                      ( { e = G.IdSpecial ((G.This | G.Self), _); _ },
+                        _,
+                        G.FN (G.Id _ as name) ) ->
+                      Some name
                   | G.DotAccess (obj_expr, _, G.FN _) when lang = Lang.Go -> (
                       match obj_expr.G.e with
                       | G.N obj_name -> (

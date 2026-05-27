@@ -418,6 +418,37 @@ def test_interfile_taint_flows_through_class_field_helper_instances(
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_constructor_assigned_helper_instances(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_constructor_field_instance.yaml",
+        target_name="taint_interfile_constructor_field_instance",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = output["results"]
+
+    assert set(output["interfile_languages_used"]) == {"JavaScript", "TypeScript"}
+    assert {
+        (result["check_id"], result["path"], result["start"]["line"])
+        for result in results
+    } == {
+        (
+            "rules.taint_interfile_constructor_field_instance_js",
+            "targets/taint_interfile_constructor_field_instance/javascript/app.js",
+            9,
+        ),
+        (
+            "rules.taint_interfile_constructor_field_instance_ts",
+            "targets/taint_interfile_constructor_field_instance/typescript/app.ts",
+            9,
+        ),
+    }
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_applies_imported_javascript_sanitizers(
     run_semgrep_in_tmp: RunSemgrep,
 ):
