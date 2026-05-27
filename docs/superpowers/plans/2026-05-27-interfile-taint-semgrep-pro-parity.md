@@ -44,7 +44,7 @@
 - JavaScript and TypeScript constructor-assigned helper instances now resolve when constructors assign `this.source = new Source()` and later methods call `this.source.getInput()`.
 - TypeScript constructor parameter properties now resolve when a typed parameter property such as `constructor(private source: Source)` is later used through `this.source.getInput()`.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
-- JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes either `new Source()` or a local helper alias into `new App(...)`.
+- JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, or a simple reassigned helper alias into `new App(...)`.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -68,6 +68,8 @@
 - `123748e9f555f615489927d055dc701bfb12ffc4` - `fix: resolve javascript constructor parameter instances` (unsigned for the same local signing issue)
 - `304ac57879d2a374fb943ac2e399a1073b40cb38` - `docs: record javascript constructor parameter checkpoint` (unsigned for the same local signing issue)
 - `e6ea4ccfa6a559e2f65b345332abc056d70fee34` - `fix: resolve javascript constructor parameter aliases` (unsigned for the same local signing issue)
+- `8d4a4447b30389811c1e95f11e571f29827d2342` - `docs: record javascript constructor alias checkpoint` (unsigned for the same local signing issue)
+- `15b877b990be4b1a732909bcc983cfd256ec85fc` - `fix: propagate javascript constructor helper aliases` (unsigned for the same local signing issue)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -377,6 +379,7 @@ Verified in this handoff:
 - Focused direct scans passed for callback-body-sink syntax across Ruby, Scala, Rust, Swift, Elixir, and Clojure.
 - Focused direct scans passed for untyped JavaScript constructor-parameter helper instances where `this.source = source` and `new App(new Source())` supplies the helper object.
 - Focused direct scans passed for untyped JavaScript constructor-parameter helper aliases where `const helper = new Source(); new App(helper)` supplies the helper object.
+- Focused direct scans passed for simple reassigned JavaScript constructor-parameter helper aliases where `const selected = helper; new App(selected)` supplies the helper object.
 - Direct probes passed for Java/Python/JavaScript override dispatch and multi-level inheritance.
 - Broad direct scans passed for `taint_interfile_language_matrix` with 28 findings and `taint_interfile_parser_smoke` with 13 findings.
 - `--dataflow-traces` on `taint_interfile_js` produced cross-file source, intermediate variable, and sink trace locations.
@@ -386,7 +389,7 @@ Verified in this handoff:
 
 Known boundaries:
 - `generic` and `regex` are extended non-AST analyzers, not parser-backed target languages. Taint mode now rejects them with a structured `SemgrepError` and CLI help documents that they do not support taint mode.
-- Untyped JavaScript constructor-parameter injection for direct constructor calls such as `constructor(source) { this.source = source }` with `new App(new Source())` is now covered, and local helper aliases such as `const helper = new Source(); new App(helper)` are covered. Broader dependency-injection object-shape variants remain unaudited, including factory-produced constructor arguments, reassigned aliases, and framework-specific injection containers.
+- Untyped JavaScript constructor-parameter injection for direct constructor calls such as `constructor(source) { this.source = source }` with `new App(new Source())` is now covered. Local helper aliases such as `const helper = new Source(); new App(helper)` and simple reassignments such as `const selected = helper; new App(selected)` are covered. Broader dependency-injection object-shape variants remain unaudited, including factory-produced constructor arguments, branch-dependent aliases, and framework-specific injection containers.
 - PHP callback-body-sink syntax remains blocked by parser/AST lowering for anonymous and arrow functions: current dumps drop lambda parameters and sink call arguments, so the taint engine cannot follow the callback argument into `sink($value)`. PHP callback-return syntax remains covered.
 - Do not claim full Semgrep Pro parity until a requirement-by-requirement audit proves it.
 
@@ -688,14 +691,16 @@ Next resume point: continue auditing language-specific class-field edge cases or
 
 ## Latest Session Update: JavaScript Constructor Parameter Instances Green
 
-Untyped JavaScript constructor-parameter helper instances now work when a constructor stores a parameter into an instance field and a call site supplies a helper instance directly or through a local alias.
+Untyped JavaScript constructor-parameter helper instances now work when a constructor stores a parameter into an instance field and a call site supplies a helper instance directly, through a local alias, or through a simple reassigned alias.
 
 - `src/tainting/Object_initialization.ml` records constructor assignments like `this.source = source` by parameter index.
 - When the same class is instantiated with `new App(new Source())`, object initialization now maps the stored field to the argument's constructor class.
 - When the constructor argument is an identifier such as `helper`, object initialization now reuses the existing `helper -> Source` object mapping from `const helper = new Source()`.
+- Simple object aliases now propagate mappings forward, so `const selected = helper; new App(selected)` keeps the `selected -> Source` shape.
 - This reuses the existing nested `this.<field>.<method>()` call graph and taint-signature lookup support.
 - `cli/tests/default/e2e/rules/taint_interfile_js_constructor_parameter_instance.yaml` and `targets/taint_interfile_js_constructor_parameter_instance/` lock the regression.
 - `cli/tests/default/e2e/rules/taint_interfile_js_constructor_parameter_alias.yaml` and `targets/taint_interfile_js_constructor_parameter_alias/` lock the local-alias regression in isolation.
+- `cli/tests/default/e2e/rules/taint_interfile_js_constructor_parameter_reassigned_alias.yaml` and `targets/taint_interfile_js_constructor_parameter_reassigned_alias/` lock the reassigned-alias regression in isolation.
 
 Red proof before the fix:
 
@@ -723,14 +728,27 @@ taint_interfile_js_constructor_parameter_alias count=1 expected=1 errors=0 inter
 rules.taint_interfile_js_constructor_parameter_alias    targets/taint_interfile_js_constructor_parameter_alias/app.js    9
 ```
 
+Reassigned-alias red proof before the alias-propagation fix:
+
+```text
+taint_interfile_js_constructor_parameter_reassigned_alias count=0 expected=1 errors=0 interfile_lang_count=1
+```
+
+Reassigned-alias green proof after the alias-propagation fix:
+
+```text
+taint_interfile_js_constructor_parameter_reassigned_alias count=1 expected=1 errors=0 interfile_lang_count=1
+rules.taint_interfile_js_constructor_parameter_reassigned_alias    targets/taint_interfile_js_constructor_parameter_reassigned_alias/app.js    9
+```
+
 Current verification after the fix:
 
 - Docker `make core` passes.
-- Full direct regression matrix passes, including `taint_interfile_js_constructor_parameter_instance count=1`, `taint_interfile_js_constructor_parameter_alias count=1`, `taint_interfile_constructor_field_instance count=2`, `taint_interfile_class_field_instance count=2`, `taint_interfile_callback_body_language_matrix count=6`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
+- Full direct regression matrix passes, including `taint_interfile_js_constructor_parameter_instance count=1`, `taint_interfile_js_constructor_parameter_alias count=1`, `taint_interfile_js_constructor_parameter_reassigned_alias count=1`, `taint_interfile_constructor_field_instance count=2`, `taint_interfile_class_field_instance count=2`, `taint_interfile_callback_body_language_matrix count=6`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
 - `git diff --check` passes.
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
-Boundary note: direct constructor-argument object shapes and simple local helper aliases are covered. Broader dependency-injection forms remain unaudited, including factory-returned constructor arguments, reassigned aliases, and framework/container injection.
+Boundary note: direct constructor-argument object shapes, simple local helper aliases, and simple alias reassignments are covered. Broader dependency-injection forms remain unaudited, including factory-returned constructor arguments, branch-dependent aliases, and framework/container injection.
 
 Next resume point: continue auditing broader dependency-injection object-shape forms, language-specific class-field edge cases, or the PHP callback-body parser lowering boundary.
 
