@@ -249,6 +249,13 @@ let max_bash_arg_index_in_effect acc = function
           | None -> Some index
           | Some prev -> Some (max prev index))
       | _ -> acc)
+  | Effect.CleanLval lval -> (
+      match lval.Taint.base with
+      | Taint.BArg { index; _ } when index >= 0 -> (
+          match acc with
+          | None -> Some index
+          | Some prev -> Some (max prev index))
+      | _ -> acc)
   | Effect.ToSinkInCall { args_taints; _ } ->
       args_taints
       |> List.fold_left
@@ -404,6 +411,7 @@ let extract_signature (taint_inst : TRI.t) ?(in_env : Taint_lval_env.t option)
                in
                if has_relevant_taint then Effects.add eff acc
              else acc (* Skip only effects with no relevant taint *)
+           | Effect.CleanLval _ -> Effects.add eff acc
            | Effect.ToSinkInCall _ -> Effects.add eff acc)
          Effects.empty
   in

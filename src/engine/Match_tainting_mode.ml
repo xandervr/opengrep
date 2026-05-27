@@ -200,6 +200,7 @@ let trace_of_source source =
 let pms_of_effect ~match_on (effect_ : Effect.t) =
   match effect_ with
   | ToLval _
+  | CleanLval _
   | ToReturn _
   | ToSinkInCall _ ->
       []

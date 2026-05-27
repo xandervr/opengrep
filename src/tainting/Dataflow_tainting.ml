@@ -303,6 +303,15 @@ let record_effects env new_effects =
     in
     env.effects_acc := Effects.add_list new_effects !(env.effects_acc)
 
+let lval_of_name_offset var offset =
+  let* rev_offset = T.rev_IL_offset_of_offset offset in
+  Some { base = Var var; rev_offset }
+
+let clean_name_offset lval_env var offset =
+  match lval_of_name_offset var offset with
+  | Some lval -> Lval_env.clean lval_env lval
+  | None -> lval_env
+
 let unify_mvars_sets env mvars1 mvars2 =
   let xs =
     List.fold_left
@@ -1899,6 +1908,8 @@ let check_function_call env fun_exp args
                 m "INSTANTIATE_SIG: Effect[%d] ToLval with %d taints"
                   i
                   (Taint.Taint_set.cardinal taints))
+        | Sig_inst.CleanLval _ ->
+            Log.debug (fun m -> m "INSTANTIATE_SIG: Effect[%d] CleanLval" i)
         | Sig_inst.ToSinkInCall _ ->
             Log.debug (fun m -> m "INSTANTIATE_SIG: Effect[%d] ToSinkInCall" i)
       ) call_effects;
@@ -1946,6 +1957,8 @@ let check_function_call env fun_exp args
                    ( taints_acc,
                      shape_acc,
                      lval_env |> Lval_env.add var offset taints )
+               | CleanLval (var, offset) ->
+                   (taints_acc, shape_acc, clean_name_offset lval_env var offset)
                | ToSinkInCall { callee; arg; args_taints } ->
                    (* Preserved ToSinkInCall from signature extraction - try to resolve it *)
                    let resolved_call_effects =
@@ -2017,6 +2030,8 @@ let check_function_call env fun_exp args
                                 Lval_env.add_control_taints lval_env control_taints)
                            | ToLval (taints, var, offset) ->
                                (taints_acc, shape_acc, lval_env |> Lval_env.add var offset taints)
+                           | CleanLval (var, offset) ->
+                               (taints_acc, shape_acc, clean_name_offset lval_env var offset)
                            | ToSinkInCall { callee; arg; args_taints } ->
                                (* Re-record nested ToSinkInCall for next iteration *)
                                record_effects env [Effect.ToSinkInCall { callee; arg; args_taints }];
@@ -2169,6 +2184,10 @@ let call_with_intrafile lval_opt e env args instr =
                           | ToLval (taints, lval_name, offset) ->
                               let lval_env = Lval_env.add lval_name offset taints lval_env in
                               (taints_acc, shape_acc, lval_env)
+                          | CleanLval (lval_name, offset) ->
+                              ( taints_acc,
+                                shape_acc,
+                                clean_name_offset lval_env lval_name offset )
                           | ToSinkInCall { callee; arg; args_taints = args_taints_inner } ->
                               (* Preserved ToSinkInCall from signature extraction - try to resolve it *)
                               let resolved_call_effects =
@@ -2239,6 +2258,8 @@ let call_with_intrafile lval_opt e env args instr =
                                            Lval_env.add_control_taints lval_env control_taints)
                                       | ToLval (taints, var, offset) ->
                                           (taints_acc, shape_acc, lval_env |> Lval_env.add var offset taints)
+                                      | CleanLval (var, offset) ->
+                                          (taints_acc, shape_acc, clean_name_offset lval_env var offset)
                                       | ToSinkInCall _ ->
                                           (* Nested ToSinkInCall - just record it *)
                                           record_effects env [ Effect.ToSinkInCall { callee; arg; args_taints = args_taints_inner } ];
@@ -2771,6 +2792,15 @@ let check_tainted_return env tok e : Taints.t * S.shape * Lval_env.t =
   record_effects env effects;
   (taints, shape, var_env')
 
+let lval_is_clean_in_cell cell lval =
+  match Shape.find_in_cell lval.T.offset cell with
+  | `Clean
+  | `Found (S.Cell (`Clean, _)) ->
+      true
+  | `Found _
+  | `Not_found _ ->
+      false
+
 let effects_from_arg_updates_at_exit enter_env exit_env : Effect.t list =
   (* TOOD: We need to get a map of `lval` to `Taint.arg`, and if an extension
    * of `lval` has new taints, then we can compute its correspoding `Taint.arg`
@@ -2794,16 +2824,23 @@ let effects_from_arg_updates_at_exit enter_env exit_env : Effect.t list =
              | _ :: _ :: _ ->
                  Seq.empty
              | [ lval ] ->
-                 Shape.enum_in_cell exit_var_ref
-                 |> Seq.filter_map (fun (offset, exit_taints) ->
-                        let lval =
-                          { lval with offset = lval.offset @ offset }
-                        in
-                        let new_taints = Taints.diff exit_taints enter_taints in
-                        (* TODO: Also report if taints are _cleaned_. *)
-                        if not (Taints.is_empty new_taints) then
-                          Some (Effect.ToLval (new_taints, lval))
-                        else None)))
+                 let clean_effect =
+                   if lval_is_clean_in_cell exit_var_ref lval then
+                     Seq.return (Effect.CleanLval lval)
+                   else Seq.empty
+                 in
+                 let taint_effects =
+                   Shape.enum_in_cell exit_var_ref
+                   |> Seq.filter_map (fun (offset, exit_taints) ->
+                          let lval =
+                            { lval with offset = lval.offset @ offset }
+                          in
+                          let new_taints = Taints.diff exit_taints enter_taints in
+                          if not (Taints.is_empty new_taints) then
+                            Some (Effect.ToLval (new_taints, lval))
+                          else None)
+                 in
+                 Seq.append clean_effect taint_effects))
   |> Seq.concat |> List.of_seq
 
 let check_tainted_control_at_exit node env =
@@ -3070,6 +3107,7 @@ and fixpoint_lambda taint_inst func needed_vars lambda_name lambda_cfg in_env
     |> Effects.filter (function
          | ToSink _
          | ToLval _
+         | CleanLval _
          | ToSinkInCall _ ->
              true
          | ToReturn _ -> false)
