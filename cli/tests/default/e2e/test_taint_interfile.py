@@ -605,6 +605,32 @@ def test_interfile_taint_flows_through_javascript_arrow_factories(
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_javascript_higher_order_factories(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_js_constructor_parameter_higher_order_factory.yaml",
+        target_name="taint_interfile_js_constructor_parameter_higher_order_factory",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = output["results"]
+
+    assert output["interfile_languages_used"] == ["JavaScript"]
+    assert len(results) == 1
+    assert (
+        results[0]["check_id"]
+        == "rules.taint_interfile_js_constructor_parameter_higher_order_factory"
+    )
+    assert (
+        results[0]["path"]
+        == "targets/taint_interfile_js_constructor_parameter_higher_order_factory/app.js"
+    )
+    assert results[0]["start"]["line"] == 9
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_javascript_branch_constructor_aliases(
     run_semgrep_in_tmp: RunSemgrep,
 ):

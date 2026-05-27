@@ -49,6 +49,16 @@ let same_name name1 name2 =
   | Some str1, Some str2 -> String.equal str1 str2
   | _ -> false
 
+let same_resolved_name name1 name2 =
+  match (name1, name2) with
+  | G.Id ((str1, _), id_info1), G.Id ((str2, _), id_info2) ->
+      String.equal str1 str2
+      &&
+      (match (!(id_info1.G.id_resolved), !(id_info2.G.id_resolved)) with
+      | Some (_, sid1), Some (_, sid2) -> G.SId.equal sid1 sid2
+      | _ -> true)
+  | _ -> same_name name1 name2
+
 (* Matcher: new ClassName(args) - basic form *)
 let match_new_basic rval_expr class_names =
   match rval_expr.G.e with
@@ -195,6 +205,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let object_mappings = ref [] in
   let constructor_param_field_mappings = ref [] in
   let function_return_mappings = ref [] in
+  let function_alias_mappings = ref [] in
   let class_name_from_type (type_ : G.type_) =
     match type_.G.t with
     | G.TyN name when is_known_class name class_names -> Some name
@@ -220,44 +231,44 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     in
     List.nth_opt positional_args index
   in
-  let class_name_from_mapping mappings expr =
+  let name_from_mapping mappings expr =
     match expr.G.e with
-    | G.N (G.Id ((arg_name, _), arg_id_info)) ->
-        let arg_resolved = !(arg_id_info.G.id_resolved) in
+    | G.N name ->
         !mappings
-        |> List.find_opt (fun (var_name, _class_name) ->
-               match var_name with
-               | G.Id ((var_name, _), var_id_info) ->
-                   String.equal var_name arg_name
-                   &&
-                   (match (arg_resolved, !(var_id_info.G.id_resolved)) with
-                   | Some (_, sid1), Some (_, sid2) -> G.SId.equal sid1 sid2
-                   | _ -> true)
-               | _ -> false)
+        |> List.find_opt (fun (mapped_name, _resolved_name) ->
+               same_resolved_name name mapped_name)
         |> Option.map snd
     | _ -> None
+  in
+  let name_from_called_function mappings func_expr =
+    match func_expr.G.e with
+    | G.Call ({ e = G.N name; _ }, _) ->
+        !mappings
+        |> List.find_opt (fun (mapped_name, _resolved_name) ->
+               same_resolved_name name mapped_name)
+        |> Option.map snd
+    | _ -> None
+  in
+  let name_from_name_mapping mappings name =
+    !mappings
+    |> List.find_opt (fun (mapped_name, _resolved_name) ->
+           same_resolved_name name mapped_name)
+    |> Option.map snd
   in
   let class_name_from_object_mapping expr =
-    class_name_from_mapping object_mappings expr
+    name_from_mapping object_mappings expr
   in
   let class_name_from_function_return expr =
-    match expr.G.e with
-    | G.Call ({ e = G.N (G.Id ((func_name, _), func_id_info)); _ }, _) ->
-        let func_resolved = !(func_id_info.G.id_resolved) in
-        !function_return_mappings
-        |> List.find_opt (fun (returning_func, _class_name) ->
-               match returning_func with
-               | G.Id ((returning_func_name, _), returning_func_id_info) ->
-                   String.equal returning_func_name func_name
-                   &&
-                   (match
-                      (func_resolved, !(returning_func_id_info.G.id_resolved))
-                    with
-                   | Some (_, sid1), Some (_, sid2) -> G.SId.equal sid1 sid2
-                   | _ -> true)
-               | _ -> false)
-        |> Option.map snd
-    | _ -> None
+    match name_from_called_function function_return_mappings expr with
+    | Some _ as class_name -> class_name
+    | None -> (
+        match expr.G.e with
+        | G.Call (callee_expr, _) -> (
+            match name_from_called_function function_alias_mappings callee_expr with
+            | Some returned_func ->
+                name_from_name_mapping function_return_mappings returned_func
+            | None -> None)
+        | _ -> None)
   in
   let rec class_name_from_expr expr =
     match extract_class_name_from_constructor expr lang class_names with
@@ -353,7 +364,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
       match extract_class_name_from_constructor expr lang class_names with
       | Some _ as class_name -> class_name
       | None -> (
-          match class_name_from_mapping local_object_mappings expr with
+          match name_from_mapping local_object_mappings expr with
           | Some _ as class_name -> class_name
           | None -> (
               match class_name_from_function_return expr with
@@ -395,7 +406,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
               | Some class_name ->
                   function_return_mappings :=
                     (func_name, class_name) :: !function_return_mappings
-              | None -> ())
+              | None -> (
+                  match return_expr.G.e with
+                  | G.N returned_func ->
+                      function_alias_mappings :=
+                        (func_name, returned_func) :: !function_alias_mappings
+                  | _ -> ()))
           | _ -> ());
           super#visit_stmt () stmt
       end
