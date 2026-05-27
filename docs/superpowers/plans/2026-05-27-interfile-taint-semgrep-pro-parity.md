@@ -40,6 +40,7 @@
 - Callback imports now resolve relative to the caller file before falling back to suffix-only matching, so repeated `source`/`apply` helpers in sibling JavaScript/Python directories no longer suppress callback findings.
 - Typed callback flows are now covered for Java, Kotlin, and C# function/delegate parameters in both callback-return and callback-body-sink forms.
 - Callback-return flows are now covered across Ruby, Scala, Rust, Swift, PHP, Elixir, and Clojure syntax forms.
+- JavaScript and TypeScript class-field helper instances now resolve through both the call graph and taint signature lookup, so `this.source.getInput()` can consume a cross-file `Source#getInput` signature.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -55,6 +56,7 @@
 - `3b3aa6f15375c660b1fe5a2832194b00c7f57073` - `fix: resolve callback imports by caller path` (unsigned for the same local signing issue)
 - `164fb8debd063f55046f3c42be735fc544aca1b7` - `test: cover typed interfile callbacks` (unsigned for the same local signing issue)
 - `93d972c3e694399a0093379468455639181c6bd6` - `test: cover callback language matrix` (unsigned for the same local signing issue)
+- `166fe1048fe20eb9c03f3efe45281375d5a7e33d` - `fix: resolve class field instance calls` (unsigned for the same local signing issue)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -85,7 +87,7 @@ The Docker-built help text now says:
 1. Re-run the Docker direct scan matrix from Task 4 after any further engine change.
 2. Keep `git diff --check` and `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` green.
 3. Continue auditing remaining Semgrep Pro parity gaps beyond the covered import/value/export/object/trace/inheritance cases.
-4. Audit remaining class-field and dispatch gaps before making any broad class-field parity claim: framework-specific object construction, language-specific class-field edge cases, and deeper callback/HOF language-specific forms.
+4. Audit remaining class-field and dispatch gaps before making any broad class-field parity claim: deeper framework-specific object construction forms, language-specific class-field edge cases, and deeper callback/HOF language-specific forms.
 
 Latest side-effect sanitizer verification:
 
@@ -358,6 +360,7 @@ Verified in this handoff:
 - Focused direct scans passed for JavaScript/Python callback imports with duplicate helper names in sibling directories.
 - Focused direct scans passed for Java/Kotlin/C# typed callbacks and delegates.
 - Focused direct scans passed for callback-return syntax across Ruby, Scala, Rust, Swift, PHP, Elixir, and Clojure.
+- Focused direct scans passed for JavaScript and TypeScript class-field helper instances where `this.source.getInput()` calls a helper object initialized in a class field.
 - Direct probes passed for Java/Python/JavaScript override dispatch and multi-level inheritance.
 - Broad direct scans passed for `taint_interfile_language_matrix` with 28 findings and `taint_interfile_parser_smoke` with 13 findings.
 - `--dataflow-traces` on `taint_interfile_js` produced cross-file source, intermediate variable, and sink trace locations.
@@ -529,6 +532,39 @@ Current verification after the coverage checkpoint:
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
 Next resume point: audit framework-specific object construction gaps, language-specific class-field edge cases, or callback-body-sink variants for these broader callback languages.
+
+---
+
+## Latest Session Update: Class Field Helper Instances Green
+
+JavaScript and TypeScript class-field helper instances now work when a method calls through `this.<field>.<method>()`.
+
+- `src/tainting/Graph_from_AST.ml` now resolves nested receiver calls such as `this.source.getInput()` by mapping the instance field to the helper class through object-initialization mappings or type metadata.
+- `src/tainting/Dataflow_tainting.ml` now consumes taint signatures for nested `this` receiver calls by using the call-graph edge at the method token. This complements the existing `obj.method()` and `this.method()` lookup paths.
+- `cli/tests/default/e2e/rules/taint_interfile_class_field_instance.yaml` and `targets/taint_interfile_class_field_instance/` lock the JavaScript and TypeScript class-field helper regression.
+
+Red proof before the fix:
+
+```text
+taint_interfile_class_field_instance count=0 expected=2 errors=0 interfile_lang_count=2
+```
+
+Green proof after the fix:
+
+```text
+taint_interfile_class_field_instance count=2 expected=2 errors=0 interfile_lang_count=2
+rules.taint_interfile_class_field_instance_js    targets/taint_interfile_class_field_instance/javascript/app.js    7
+rules.taint_interfile_class_field_instance_ts    targets/taint_interfile_class_field_instance/typescript/app.ts    7
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes.
+- Full direct regression matrix passes, including `taint_interfile_class_field_instance count=2`, `taint_interfile_static_field count=5`, `taint_interfile_callback_collision count=4`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+
+Next resume point: continue auditing deeper framework-specific object construction forms, language-specific class-field edge cases, or callback-body-sink variants for the broader callback language matrix.
 
 ---
 
