@@ -759,6 +759,47 @@ def test_interfile_taint_flows_through_callbacks(
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_keeps_callback_imports_path_qualified(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_callback_collision.yaml",
+        target_name="taint_interfile_callback_collision",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = output["results"]
+
+    assert set(output["interfile_languages_used"]) == {"JavaScript", "Python"}
+    assert {
+        (result["check_id"], result["path"], result["start"]["line"])
+        for result in results
+    } == {
+        (
+            "rules.taint_interfile_callback_collision_js",
+            "targets/taint_interfile_callback_collision/javascript/first/app.js",
+            3,
+        ),
+        (
+            "rules.taint_interfile_callback_collision_js",
+            "targets/taint_interfile_callback_collision/javascript/second/app.js",
+            3,
+        ),
+        (
+            "rules.taint_interfile_callback_collision_python",
+            "targets/taint_interfile_callback_collision/python/first/app.py",
+            3,
+        ),
+        (
+            "rules.taint_interfile_callback_collision_python",
+            "targets/taint_interfile_callback_collision/python/second/app.py",
+            3,
+        ),
+    }
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_imported_python_module_value(
     run_semgrep_in_tmp: RunSemgrep,
 ):

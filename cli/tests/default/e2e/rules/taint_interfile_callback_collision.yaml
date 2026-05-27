@@ -1,0 +1,22 @@
+rules:
+  - id: taint_interfile_callback_collision_js
+    mode: taint
+    languages: [javascript]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile callback collision taint
+    severity: WARNING
+
+  - id: taint_interfile_callback_collision_python
+    mode: taint
+    languages: [python]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile callback collision taint
+    severity: WARNING
