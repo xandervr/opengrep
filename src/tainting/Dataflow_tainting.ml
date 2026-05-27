@@ -767,6 +767,20 @@ let lookup_signature_with_object_context env fun_exp arity =
               Shape_and_sig.(lookup_signature db callee_node arity)
           | None ->
               Shape_and_sig.lookup_signature db (Function_id.of_il_name method_name) arity)
+      | Fetch
+          {
+            base = VarSpecial ((Self | This), _);
+            rev_offset = { o = Dot method_name; _ } :: _field_offsets;
+          }
+        when Option.is_some env.class_name -> (
+          (* Method call through an instance field: this.field.method().
+             The IL offset list is reversed, so the called method is first. *)
+          get_signature_for_object
+            env.call_graph
+            env.func.name
+            db
+            (Function_id.of_il_name method_name)
+            arity)
       | Fetch { base = Var obj; rev_offset = [ { o = Dot method_name; _ } ] } -> (
           match
             get_signature_for_object

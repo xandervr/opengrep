@@ -673,6 +673,26 @@ let resolve_constructor_from_type ~(lang : Lang.t) ?(class_hierarchy = [])
                    Some (class_init_fn_id candidate_class)
                  else None)
 
+let object_mapping_class object_mappings obj_name obj_resolved =
+  object_mappings
+  |> List.find_opt (fun (var_name, _class_name) ->
+         match var_name with
+         | G.Id ((var_str, _), var_id_info) ->
+             var_str = obj_name
+             &&
+             (match (obj_resolved, !(var_id_info.G.id_resolved)) with
+             | Some (_, sid1), Some (_, sid2) -> G.SId.equal sid1 sid2
+             | _ -> true)
+         | _ -> false)
+  |> Option.map (fun (_var_name, class_name) -> class_name)
+
+let type_class_name id_info =
+  match !(id_info.G.id_type) with
+  | Some { G.t = G.TyN (G.Id _ as n); _ }
+  | Some { G.t = G.TyExpr { G.e = G.N (G.Id _ as n); _ }; _ } ->
+      Some n
+  | _ -> None
+
 let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
     ?(module_imports = []) ?(class_hierarchy = []) ?(all_funcs = [])
     ?(caller_parent_path = []) ?(call_arity : int option) (callee : G.expr) :
@@ -809,24 +829,12 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
             let method_name_str = id in
             let obj_resolved = !(obj_id_info.G.id_resolved) in
             let obj_class_opt =
-              object_mappings
-              |> List.find_opt (fun (var_name, _class_name) ->
-                     match var_name with
-                     | G.Id ((var_str, _), var_id_info) ->
-                         var_str = obj_name &&
-                         (match (obj_resolved, !(var_id_info.G.id_resolved)) with
-                          | Some (_, sid1), Some (_, sid2) -> G.SId.equal sid1 sid2
-                          | _ -> true (* fallback to name-only if unresolved *))
-                     | _ -> false)
-              |> Option.map (fun (_var_name, class_name) -> class_name)
+              object_mapping_class object_mappings obj_name obj_resolved
             in
             (* Fallback: use the type annotation (e.g. `def f(x: ClassName)`) *)
             let obj_class_opt = match obj_class_opt with
               | Some _ -> obj_class_opt
-              | None -> (match !(obj_id_info.G.id_type) with
-                  | Some { G.t = G.TyN (G.Id _ as n); _ }
-                  | Some { G.t = G.TyExpr { G.e = G.N (G.Id _ as n); _ }; _ } -> Some n
-                  | _ -> None)
+              | None -> type_class_name obj_id_info
             in
             (match obj_class_opt with
             | Some class_name ->
@@ -872,6 +880,37 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
                         in
                         resolve_constructor_from_type ~lang ~class_hierarchy
                           ~all_funcs ty)))
+        (* Method call through an instance field: this.field.method().
+           JavaScript and TypeScript require class fields to be read through
+           this, so the receiver appears as a nested DotAccess instead of a
+           plain variable. *)
+        | G.DotAccess
+            ( { e =
+                  G.DotAccess
+                    ( { e = G.IdSpecial ((G.This | G.Self), _); _ },
+                      _,
+                      G.FN (G.Id ((field_name, _), field_id_info)) );
+                _ },
+              _,
+              G.FN (G.Id ((method_name, _), _)) ) ->
+            let field_resolved = !(field_id_info.G.id_resolved) in
+            let field_class_opt =
+              match
+                object_mapping_class object_mappings field_name field_resolved
+              with
+              | Some _ as class_name -> class_name
+              | None -> type_class_name field_id_info
+            in
+            (match field_class_opt with
+            | Some class_name ->
+                let class_name_str =
+                  match class_name with
+                  | G.Id ((str, _), _) -> str
+                  | G.IdQualified { name_last = ((str, _), _); _ } -> str
+                in
+                pick_method_in_lineage class_hierarchy all_funcs call_arity
+                  class_name_str method_name
+            | None -> None)
         (* Chained call: Constructor(...).method() — receiver is a constructor.
            Python/Kotlin/Scala: ClassName(args).method()
            Java/JS/TS/C#:       new ClassName(args).method()
