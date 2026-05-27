@@ -214,6 +214,23 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     in
     List.nth_opt positional_args index
   in
+  let class_name_from_object_mapping expr =
+    match expr.G.e with
+    | G.N (G.Id ((arg_name, _), arg_id_info)) ->
+        let arg_resolved = !(arg_id_info.G.id_resolved) in
+        !object_mappings
+        |> List.find_opt (fun (var_name, _class_name) ->
+               match var_name with
+               | G.Id ((var_name, _), var_id_info) ->
+                   String.equal var_name arg_name
+                   &&
+                   (match (arg_resolved, !(var_id_info.G.id_resolved)) with
+                   | Some (_, sid1), Some (_, sid2) -> G.SId.equal sid1 sid2
+                   | _ -> true)
+               | _ -> false)
+        |> Option.map snd
+    | _ -> None
+  in
   let record_constructor_param_field_mappings class_name fdef =
     let param_indexes =
       Tok.unbracket fdef.G.fparams
@@ -275,10 +292,15 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                if mapping.class_name = class_name_str then
                  match constructor_arg_expr args mapping.param_index with
                  | Some arg_expr -> (
-                     match
-                       extract_class_name_from_constructor arg_expr lang
-                         class_names
-                     with
+                     let arg_class =
+                       match
+                         extract_class_name_from_constructor arg_expr lang
+                           class_names
+                       with
+                       | Some _ as class_name -> class_name
+                       | None -> class_name_from_object_mapping arg_expr
+                     in
+                     match arg_class with
                      | Some arg_class ->
                          object_mappings :=
                            (mapping.field_name, arg_class) :: !object_mappings
