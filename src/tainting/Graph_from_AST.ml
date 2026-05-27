@@ -549,22 +549,24 @@ let dedup_fn_ids (ids : (fn_id * Tok.t) list) : (fn_id * Tok.t) list =
 (* Helper function to identify the callee fn_id from a call expression's callee *)
 (* Resolve a type to its constructor fn_id using lang config.
    e.g. Foo → Foo#<init> (Java), Foo → Foo#__init__ (Python), Foo → Foo#initialize (Ruby) *)
-let resolve_constructor_from_type ~(lang : Lang.t) ~all_funcs (ty : G.type_) : fn_id option =
-  let class_name = match ty.G.t with
-    | G.TyN (G.Id ((name, _), _)) -> Some name
-    | G.TyExpr { G.e = G.N (G.Id ((name, _), _)); _ } -> Some name
-    | _ -> None
-  in
+let resolve_constructor_from_type ~(lang : Lang.t) ?(class_hierarchy = [])
+    ~all_funcs (ty : G.type_) : fn_id option =
+  let class_name = string_of_type ty in
   match class_name with
   | None -> None
   | Some cls ->
-      List.find_opt (fun f ->
-        match f.fn_id with
-        | [Some c; Some m] ->
-            fst c.IL.ident = cls
-            && Object_initialization.is_constructor lang (fst m.IL.ident) (Some cls)
-        | _ -> false
-      ) all_funcs |> Option.map (fun f -> f.fn_id)
+      class_lineage class_hierarchy cls
+      |> List.find_map (fun candidate_class ->
+             List.find_opt
+               (fun f ->
+                 match f.fn_id with
+                 | [ Some c; Some m ] ->
+                     fst c.IL.ident = candidate_class
+                     && Object_initialization.is_constructor lang
+                          (fst m.IL.ident) (Some candidate_class)
+                 | _ -> false)
+               all_funcs
+             |> Option.map (fun f -> f.fn_id))
 
 let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
     ?(module_imports = []) ?(class_hierarchy = []) ?(all_funcs = [])
@@ -665,7 +667,8 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
                             t_attrs = [];
                           }
                       in
-                      resolve_constructor_from_type ~lang ~all_funcs ty))
+                      resolve_constructor_from_type ~lang ~class_hierarchy
+                        ~all_funcs ty))
         in
         (match pick_imported_match id_info call_arity all_funcs with
         | Some _ as imported_match -> imported_match
@@ -762,7 +765,8 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
                               t_attrs = [];
                             }
                         in
-                        resolve_constructor_from_type ~lang ~all_funcs ty)))
+                        resolve_constructor_from_type ~lang ~class_hierarchy
+                          ~all_funcs ty)))
         (* Chained call: Constructor(...).method() — receiver is a constructor.
            Python/Kotlin/Scala: ClassName(args).method()
            Java/JS/TS/C#:       new ClassName(args).method()
@@ -881,7 +885,10 @@ let extract_calls ~(lang : Lang.t) ?(object_mappings = []) ?(module_imports = []
             (* Constructor call: new ClassName(args).
                Use the class name token so it matches the eorig token
                in class_construction's constructor expression. *)
-            (match resolve_constructor_from_type ~lang ~all_funcs ty with
+            (match
+               resolve_constructor_from_type ~lang ~class_hierarchy ~all_funcs
+                 ty
+             with
             | Some fn_id ->
                 let tok =
                   match AST_generic_helpers.ii_of_any (G.T ty) with

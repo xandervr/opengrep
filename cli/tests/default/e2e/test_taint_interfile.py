@@ -585,6 +585,42 @@ def test_interfile_taint_flows_through_inherited_python_methods(
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_inherited_constructors(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_inherited_constructor.yaml",
+        target_name="taint_interfile_inherited_constructor",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = output["results"]
+
+    assert set(output["interfile_languages_used"]) == {"Java", "JavaScript", "Python"}
+    assert {
+        (result["check_id"], result["path"], result["start"]["line"])
+        for result in results
+    } == {
+        (
+            "rules.taint_interfile_inherited_constructor_java",
+            "targets/taint_interfile_inherited_constructor/java/App.java",
+            4,
+        ),
+        (
+            "rules.taint_interfile_inherited_constructor_js",
+            "targets/taint_interfile_inherited_constructor/javascript/app.js",
+            5,
+        ),
+        (
+            "rules.taint_interfile_inherited_constructor_python",
+            "targets/taint_interfile_inherited_constructor/python/app.py",
+            6,
+        ),
+    }
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_imported_python_module_value(
     run_semgrep_in_tmp: RunSemgrep,
 ):
