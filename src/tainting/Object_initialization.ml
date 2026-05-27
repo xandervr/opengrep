@@ -44,6 +44,11 @@ let string_of_name = function
   | G.Id ((name, _), _) -> Some name
   | G.IdQualified { name_last = ((name, _), _); _ } -> Some name
 
+let same_name name1 name2 =
+  match (string_of_name name1, string_of_name name2) with
+  | Some str1, Some str2 -> String.equal str1 str2
+  | _ -> false
+
 (* Matcher: new ClassName(args) - basic form *)
 let match_new_basic rval_expr class_names =
   match rval_expr.G.e with
@@ -251,13 +256,25 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         |> Option.map snd
     | _ -> None
   in
-  let class_name_from_expr expr =
+  let rec class_name_from_expr expr =
     match extract_class_name_from_constructor expr lang class_names with
     | Some _ as class_name -> class_name
     | None -> (
         match class_name_from_object_mapping expr with
         | Some _ as class_name -> class_name
-        | None -> class_name_from_function_return expr)
+        | None -> (
+            match class_name_from_function_return expr with
+            | Some _ as class_name -> class_name
+            | None -> class_name_from_conditional_expr expr))
+  and class_name_from_conditional_expr expr =
+    match expr.G.e with
+    | G.Conditional (_condition, then_expr, else_expr) -> (
+        match (class_name_from_expr then_expr, class_name_from_expr else_expr) with
+        | Some then_class, Some else_class when same_name then_class else_class
+          ->
+            Some then_class
+        | _ -> None)
+    | _ -> None
   in
   let record_constructor_param_field_mappings class_name fdef =
     let param_indexes =
