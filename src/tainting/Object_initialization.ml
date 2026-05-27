@@ -262,13 +262,40 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     match name_from_called_function function_return_mappings expr with
     | Some _ as class_name -> class_name
     | None -> (
+        match name_from_called_function function_alias_mappings expr with
+        | Some returned_func ->
+            name_from_name_mapping function_return_mappings returned_func
+        | None -> (
+            match expr.G.e with
+            | G.Call (callee_expr, _) -> (
+                match
+                  name_from_called_function function_alias_mappings callee_expr
+                with
+                | Some returned_func ->
+                    name_from_name_mapping function_return_mappings returned_func
+                | None -> None)
+            | _ -> None))
+  in
+  let function_alias_from_expr expr =
+    match name_from_called_function function_alias_mappings expr with
+    | Some _ as returned_func -> returned_func
+    | None -> (
         match expr.G.e with
-        | G.Call (callee_expr, _) -> (
-            match name_from_called_function function_alias_mappings callee_expr with
-            | Some returned_func ->
-                name_from_name_mapping function_return_mappings returned_func
-            | None -> None)
+        | G.N name -> (
+            match name_from_name_mapping function_alias_mappings name with
+            | Some _ as returned_func -> returned_func
+            | None -> (
+                match name_from_name_mapping function_return_mappings name with
+                | Some _ -> Some name
+                | None -> None))
         | _ -> None)
+  in
+  let record_function_alias_mapping alias_name init_expr =
+    match function_alias_from_expr init_expr with
+    | Some returned_func ->
+        function_alias_mappings :=
+          (alias_name, returned_func) :: !function_alias_mappings
+    | None -> ()
   in
   let rec class_name_from_expr expr =
     match extract_class_name_from_constructor expr lang class_names with
@@ -461,6 +488,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
             | G.VarDef var_def -> (
                 match (entity.G.name, var_def.G.vinit) with
                 | G.EN var_name, Some init_expr -> (
+                    record_function_alias_mapping var_name init_expr;
                     let class_name = class_name_from_expr init_expr in
                     let class_name =
                       match (class_name, lang) with
@@ -500,6 +528,9 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | G.ExprStmt (expr, _) -> (
             match expr.G.e with
             | G.Assign (lval_expr, _, rval_expr) -> (
+                (match lval_expr.G.e with
+                | G.N alias_name -> record_function_alias_mapping alias_name rval_expr
+                | _ -> ());
                 let var_name =
                   match lval_expr.G.e with
                   | G.N name -> Some name
@@ -561,6 +592,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | entity, G.VarDef var_def -> (
             match (entity.G.name, var_def.G.vinit) with
             | G.EN var_name, Some init_expr -> (
+                record_function_alias_mapping var_name init_expr;
                 let class_name = class_name_from_expr init_expr in
                 match class_name with
                 | Some cls ->
