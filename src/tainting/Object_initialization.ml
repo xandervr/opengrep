@@ -412,6 +412,11 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
             match entity.G.name with
             | G.EN func_name -> record_function_return_mapping func_name fdef
             | _ -> ())
+        | entity, G.VarDef { G.vinit = Some { G.e = G.Lambda fdef; _ }; _ }
+          -> (
+            match entity.G.name with
+            | G.EN func_name -> record_function_return_mapping func_name fdef
+            | _ -> ())
         | _ -> ());
         super#visit_definition () def
     end
