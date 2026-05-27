@@ -269,6 +269,13 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         |> Option.map (fun (_obj_name, _field_name, class_name) -> class_name)
     | _ -> None
   in
+  let class_name_from_object_property_name obj_name field_name =
+    !object_property_mappings
+    |> List.find_opt (fun (mapped_obj, mapped_field, _class_name) ->
+           same_resolved_name obj_name mapped_obj
+           && same_resolved_name field_name mapped_field)
+    |> Option.map (fun (_obj_name, _field_name, class_name) -> class_name)
+  in
   let class_name_from_function_return expr =
     match name_from_called_function function_return_mappings expr with
     | Some _ as class_name -> class_name
@@ -424,6 +431,40 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
              | _ -> ())
     | _ -> ()
   in
+  let record_destructured_object_property_mappings init_expr =
+    let local_name_from_field_init field_name = function
+      | Some { G.e = G.N local_name; _ } -> Some local_name
+      | Some _ -> None
+      | None -> Some field_name
+    in
+    match init_expr.G.e with
+    | G.Assign ({ e = G.Record (_, fields, _); _ }, _, { e = G.N obj_name; _ })
+      ->
+        fields
+        |> List.iter (function
+             | G.F
+                 {
+                   G.s =
+                     G.DefStmt
+                       ( field_entity,
+                         G.FieldDefColon { G.vinit = field_init; _ } );
+                   _;
+                 } -> (
+                 match field_entity.G.name with
+                 | G.EN field_name -> (
+                     match
+                       ( local_name_from_field_init field_name field_init,
+                         class_name_from_object_property_name obj_name field_name
+                       )
+                     with
+                     | Some local_name, Some class_name ->
+                         object_mappings :=
+                           (local_name, class_name) :: !object_mappings
+                     | _ -> ())
+                 | _ -> ())
+             | _ -> ())
+    | _ -> ()
+  in
   let record_function_return_mapping func_name fdef =
     let local_object_mappings = ref [] in
     let rec class_name_from_return_expr expr =
@@ -528,6 +569,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                 match (entity.G.name, var_def.G.vinit) with
                 | G.EN var_name, Some init_expr -> (
                     record_object_property_mappings var_name init_expr;
+                    record_destructured_object_property_mappings init_expr;
                     record_function_alias_mapping var_name init_expr;
                     let class_name = class_name_from_expr init_expr in
                     let class_name =
@@ -635,6 +677,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
             match (entity.G.name, var_def.G.vinit) with
             | G.EN var_name, Some init_expr -> (
                 record_object_property_mappings var_name init_expr;
+                record_destructured_object_property_mappings init_expr;
                 record_function_alias_mapping var_name init_expr;
                 let class_name = class_name_from_expr init_expr in
                 match class_name with
