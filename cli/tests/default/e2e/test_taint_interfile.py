@@ -672,6 +672,52 @@ def test_interfile_taint_flows_through_unqualified_instance_fields(
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_static_fields(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_static_field.yaml",
+        target_name="taint_interfile_static_field",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = output["results"]
+
+    assert set(output["interfile_languages_used"]) == {"C#", "Java", "JavaScript"}
+    assert {
+        (result["check_id"], result["path"], result["start"]["line"])
+        for result in results
+    } == {
+        (
+            "rules.taint_interfile_static_field_java",
+            "targets/taint_interfile_static_field/java_unqualified/App.java",
+            3,
+        ),
+        (
+            "rules.taint_interfile_static_field_java",
+            "targets/taint_interfile_static_field/java_qualified/App.java",
+            3,
+        ),
+        (
+            "rules.taint_interfile_static_field_csharp",
+            "targets/taint_interfile_static_field/csharp_unqualified/App.cs",
+            3,
+        ),
+        (
+            "rules.taint_interfile_static_field_csharp",
+            "targets/taint_interfile_static_field/csharp_qualified/App.cs",
+            3,
+        ),
+        (
+            "rules.taint_interfile_static_field_js",
+            "targets/taint_interfile_static_field/javascript/app.js",
+            4,
+        ),
+    }
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_imported_python_module_value(
     run_semgrep_in_tmp: RunSemgrep,
 ):

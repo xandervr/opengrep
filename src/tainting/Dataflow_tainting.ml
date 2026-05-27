@@ -447,11 +447,36 @@ let unqualified_instance_field_lval env (lval : IL.lval) : IL.lval option =
       match !(name.id_info.id_resolved) with
       | Some (G.EnclosedVar, _) ->
           let field_offset = { o = Dot name; oorig = NoOrig } in
+          let static_field_lval =
+            match env.class_name with
+            | Some class_name ->
+                let class_var =
+                  IL.
+                    {
+                      ident = (class_name, Tok.unsafe_fake_tok class_name);
+                      sid = G.SId.unsafe_default;
+                      id_info = G.empty_id_info ();
+                    }
+                in
+                let class_lval =
+                  {
+                    base = Var class_var;
+                    rev_offset = lval.rev_offset @ [ field_offset ];
+                  }
+                in
+                if Option.is_some (Lval_env.find_lval env.lval_env class_lval)
+                then Some class_lval
+                else None
+            | None -> None
+          in
+          (match static_field_lval with
+          | Some _ as result -> result
+          | None ->
           Some
             {
               base = VarSpecial (This, snd name.ident);
               rev_offset = lval.rev_offset @ [ field_offset ];
-            }
+            })
       | _ -> None)
   | _ -> None
 

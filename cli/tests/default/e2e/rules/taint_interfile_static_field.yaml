@@ -1,0 +1,33 @@
+rules:
+  - id: taint_interfile_static_field_java
+    message: Taint should flow through Java static fields
+    languages: [java]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_static_field_csharp
+    message: Taint should flow through C# static fields
+    languages: [csharp]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_static_field_js
+    message: Taint should flow through JavaScript static fields
+    languages: [js]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

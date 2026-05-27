@@ -305,6 +305,7 @@ let add_bash_implicit_params_from_effects lang params effects =
 
 let extract_signature (taint_inst : TRI.t) ?(in_env : Taint_lval_env.t option)
     ?(name : IL.name option) ?(signature_db : signature_database option)
+    ?(class_name : string option)
     ?(builtin_signature_db : Shape_and_sig.builtin_signature_database option)
     ?(call_graph : Call_graph.G.t option = None)
     (func_cfg : IL.fun_cfg) : extraction_result =
@@ -336,7 +337,7 @@ let extract_signature (taint_inst : TRI.t) ?(in_env : Taint_lval_env.t option)
   in
   let fixpoint_effects, mapping =
     Dataflow_tainting.fixpoint taint_inst ~in_env:combined_env ?name
-      ?signature_db ?builtin_signature_db ?call_graph func_cfg
+      ?class_name ?signature_db ?builtin_signature_db ?call_graph func_cfg
   in
   let effects_with_preconditions =
     fixpoint_effects |> Effects.elements
@@ -506,6 +507,7 @@ let extract_signature_with_file_context
     ?(builtin_signature_db : Shape_and_sig.builtin_signature_database option)
     ~(name : IL.name)
     ?(method_properties : AST_generic.expr list = [])
+    ?(class_name : string option)
     ?(call_graph : Call_graph.G.t option = None)
     (taint_inst : Taint_rule_inst.t)
     func_cfg
@@ -526,7 +528,7 @@ let extract_signature_with_file_context
 
   let { signature; _ } =
     extract_signature taint_inst ~in_env:combined_global_env ~name
-      ~signature_db:db ?builtin_signature_db ~call_graph func_cfg
+      ~signature_db:db ?class_name ?builtin_signature_db ~call_graph func_cfg
   in
   let updated_db = Shape_and_sig.add_signature db (Function_id.of_il_name name) {sig_ = signature; arity} in
   (updated_db, signature)

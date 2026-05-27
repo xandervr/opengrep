@@ -48,7 +48,14 @@ type fun_info = {
   cfg : IL.fun_cfg;
   fdef : G.function_definition;
   is_lambda_assignment : bool;
+  is_static_method : bool;
 }
+
+let attrs_include_static attrs =
+  attrs
+  |> List.exists (function
+       | G.KeywordAttr (G.Static, _) -> true
+       | _ -> false)
 
 let class_init_name (class_name : IL.name) : IL.name =
   let class_str = fst class_name.IL.ident in
@@ -60,9 +67,27 @@ let class_init_name (class_name : IL.name) : IL.name =
       id_info = G.empty_id_info ();
     }
 
-let class_init_statement = function
+let static_field_assignment class_g_name id id_info init_expr =
+  let field_expr =
+    G.DotAccess
+      (G.N class_g_name |> G.e, G.fake ".", G.FN (G.Id (id, id_info)))
+    |> G.e
+  in
+  G.Assign (field_expr, G.fake "=", init_expr) |> G.e |> G.exprstmt
+
+let class_init_statement class_g_name = function
   | G.F { G.s = G.DefStmt (_, G.FuncDef _); _ } -> None
   | G.F { G.s = G.DefStmt (_, G.VarDef { G.vinit = None; _ }); _ } -> None
+  | G.F
+      {
+        G.s =
+          G.DefStmt
+            ( { G.name = G.EN (G.Id (id, id_info)); attrs; _ },
+              G.VarDef { G.vinit = Some init_expr; _ } );
+        _;
+      }
+    when attrs_include_static attrs ->
+      Some (static_field_assignment class_g_name id id_info init_expr)
   | G.F stmt -> Some stmt
 
 let class_init_infos lang (ast : G.program) : fun_info list =
@@ -76,7 +101,7 @@ let class_init_infos lang (ast : G.program) : fun_info list =
         | G.EN class_g_name, G.ClassDef cdef ->
             let init_stmts =
               cdef.G.cbody |> Tok.unbracket
-              |> List.filter_map class_init_statement
+              |> List.filter_map (class_init_statement class_g_name)
             in
             if not (List_.null init_stmts) then (
               let class_name = AST_to_IL.var_of_name class_g_name in
@@ -102,6 +127,7 @@ let class_init_infos lang (ast : G.program) : fun_info list =
                   cfg;
                   fdef;
                   is_lambda_assignment = false;
+                  is_static_method = true;
                 }
                 :: !infos)
         | _ -> ());
@@ -575,12 +601,18 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
                                   cfg;
                                   fdef;
                                   is_lambda_assignment = true;
+                                  is_static_method = false;
                                 }
                               in
                               add_info info (infos, info_map)))
                   | Function
                   | Method
                   | BlockCases -> (
+                      let is_static_method =
+                        match opt_ent with
+                        | Some ent -> attrs_include_static ent.attrs
+                        | None -> false
+                      in
                       match Option.bind opt_ent AST_to_IL.name_of_entity with
                       | None -> (infos, info_map)
                       | Some name ->
@@ -623,6 +655,7 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
                               cfg;
                               fdef;
                               is_lambda_assignment = false;
+                              is_static_method;
                             }
                           in
                           add_info info (infos, info_map)))
@@ -809,11 +842,16 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
                       AST_to_IL.function_definition lang synthetic_fdef
                     in
                     let cfg = CFG_build.cfg_of_fdef fdef_il in
+                    let signature_class_name =
+                      if info.is_static_method then info.class_name_str
+                      else None
+                    in
                     let db', _sig =
                       Taint_signature_extractor
                       .extract_signature_with_file_context ~arity ~db:acc_db
                         ?builtin_signature_db taint_inst ~name:info.name
                         ~method_properties:info.method_properties
+                        ?class_name:signature_class_name
                         ~call_graph:(Some relevant_graph) cfg ast
                     in
                     db')
@@ -822,11 +860,15 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
                 (* Single-arity path (unchanged logic) *)
                 let params = Tok.unbracket info.fdef.fparams in
                 let arity = get_arity params info lang in
+                let signature_class_name =
+                  if info.is_static_method then info.class_name_str else None
+                in
                 let updated_db, _signature =
                   Taint_signature_extractor.extract_signature_with_file_context
                     ~arity:(Shape_and_sig.Arity_exact arity) ~db
                     ?builtin_signature_db taint_inst ~name:info.name
                     ~method_properties:info.method_properties
+                    ?class_name:signature_class_name
                     ~call_graph:(Some relevant_graph) info.cfg ast
                 in
                 (* For Kotlin, if the last parameter is a lambda (function type),
@@ -849,6 +891,7 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
                           ~db:updated_db ?builtin_signature_db taint_inst
                           ~name:info.name
                           ~method_properties:info.method_properties
+                          ?class_name:signature_class_name
                           ~call_graph:(Some relevant_graph) info.cfg ast
                       in
                       db'

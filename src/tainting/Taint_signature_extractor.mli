@@ -23,6 +23,7 @@ val extract_signature :
   ?in_env:Taint_lval_env.t ->
   ?name:IL.name ->
   ?signature_db:signature_database ->
+  ?class_name:string ->
   ?builtin_signature_db:Shape_and_sig.builtin_signature_database ->
   ?call_graph:Call_graph.G.t option ->
   IL.fun_cfg ->
@@ -43,6 +44,7 @@ val extract_signature_with_file_context :
   ?builtin_signature_db:Shape_and_sig.builtin_signature_database ->
   name:IL.name ->
   ?method_properties:AST_generic.expr list ->
+  ?class_name:string ->
   ?call_graph:Call_graph.G.t option ->
   Taint_rule_inst.t ->
   IL.fun_cfg ->
