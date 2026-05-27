@@ -344,6 +344,88 @@ let pick_by_file_then_arity (call_tok : Tok.t) (call_arity : int option)
   | _ :: _ -> pick_by_arity call_arity same_file_matches
   | [] -> pick_by_arity call_arity matches
 
+let string_of_name (name : G.name) : string option =
+  match name with
+  | G.Id ((name, _), _) -> Some name
+  | G.IdQualified { name_last = ((name, _), _); _ } -> Some name
+
+let rec string_of_type (ty : G.type_) : string option =
+  match ty.G.t with
+  | G.TyN name -> string_of_name name
+  | G.TyApply (inner_ty, _) -> string_of_type inner_ty
+  | G.TyExpr { G.e = G.N name; _ } -> string_of_name name
+  | _ -> None
+
+type class_hierarchy = (string * string list) list
+
+let collect_class_hierarchy (ast : G.program) : class_hierarchy =
+  let hierarchy = ref [] in
+  let visitor =
+    object
+      inherit [_] G.iter as super
+
+      method! visit_definition () def =
+        (match def with
+        | entity, G.ClassDef cdef -> (
+            match entity.G.name with
+            | G.EN name -> (
+                match string_of_name name with
+                | Some class_name ->
+                    let parent_names =
+                      cdef.G.cextends
+                      |> List.filter_map (fun (parent_ty, _) ->
+                             string_of_type parent_ty)
+                    in
+                    hierarchy := (class_name, parent_names) :: !hierarchy
+                | None -> ())
+            | _ -> ())
+        | _ -> ());
+        super#visit_definition () def
+    end
+  in
+  List.iter
+    (fun item ->
+      match item.G.s with
+      | G.DefStmt def -> visitor#visit_definition () def
+      | _ -> ())
+    ast;
+  !hierarchy
+
+let dedup_strings_preserve_order (strings : string list) : string list =
+  let rec aux seen acc = function
+    | [] -> List.rev acc
+    | x :: xs ->
+        if List.mem x seen then aux seen acc xs
+        else aux (x :: seen) (x :: acc) xs
+  in
+  aux [] [] strings
+
+let class_lineage (hierarchy : class_hierarchy) (class_name : string) :
+    string list =
+  let rec aux seen name =
+    if List.mem name seen then []
+    else
+      let parents = Option.value ~default:[] (List.assoc_opt name hierarchy) in
+      name :: List.concat_map (aux (name :: seen)) parents
+  in
+  aux [] class_name |> dedup_strings_preserve_order
+
+let method_matches_in_class (all_funcs : func_info list) class_name method_name
+    : func_info list =
+  all_funcs
+  |> List.filter (fun f ->
+         match f.fn_id with
+         | [ Some c; Some m ] ->
+             fst c.IL.ident = class_name && fst m.IL.ident = method_name
+         | _ -> false)
+
+let pick_method_in_lineage (hierarchy : class_hierarchy) (all_funcs : func_info list)
+    (call_arity : int option) class_name method_name : fn_id option =
+  class_lineage hierarchy class_name
+  |> List.find_map (fun candidate_class ->
+         method_matches_in_class all_funcs candidate_class method_name
+         |> pick_by_arity call_arity)
+
 let pick_imported_match (id_info : G.id_info) (call_arity : int option)
     (all_funcs : func_info list) : fn_id option =
   match !(id_info.G.id_resolved) with
@@ -485,8 +567,9 @@ let resolve_constructor_from_type ~(lang : Lang.t) ~all_funcs (ty : G.type_) : f
       ) all_funcs |> Option.map (fun f -> f.fn_id)
 
 let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
-    ?(module_imports = []) ?(all_funcs = []) ?(caller_parent_path = [])
-    ?(call_arity : int option) (callee : G.expr) : fn_id option =
+    ?(module_imports = []) ?(class_hierarchy = []) ?(all_funcs = [])
+    ?(caller_parent_path = []) ?(call_arity : int option) (callee : G.expr) :
+    fn_id option =
   (* Extract class from caller_parent_path if present *)
   let current_class = match caller_parent_path with
     | Some cls :: _ -> Some cls
@@ -521,17 +604,9 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
               match current_class with
               | Some class_name ->
                   let class_name_str = fst class_name.IL.ident in
-                  (* Check if this method exists in the class - use string matching *)
                   let method_match =
-                    List.find_opt
-                      (fun f ->
-                        match f.fn_id with
-                        | [ Some c; Some m ]
-                          when fst c.IL.ident = class_name_str
-                               && fst m.IL.ident = callee_name_str ->
-                            true
-                        | _ -> false)
-                      all_funcs
+                    pick_method_in_lineage class_hierarchy all_funcs call_arity
+                      class_name_str callee_name_str
                   in
                   (* Debug: show all function names *)
                   let all_names =
@@ -545,7 +620,7 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
                         class_name_str callee_name_str (List.length all_funcs)
                         (Option.is_some method_match) all_names);
                   (match method_match with
-                  | Some f -> Some f.fn_id
+                  | Some fn_id -> Some fn_id
                   | None ->
                       (* It's a free function call, not a method - use string matching *)
                       let free_fn_matches =
@@ -615,13 +690,8 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
             (match current_class with
             | Some class_name ->
                 let class_name_str = fst class_name.IL.ident in
-                (* Find all methods matching class and name *)
-                let method_matches = List.filter (fun f ->
-                  match f.fn_id with
-                  | [Some c; Some m] when fst c.IL.ident = class_name_str && fst m.IL.ident = method_name_str -> true
-                  | _ -> false
-                ) all_funcs in
-                pick_by_arity call_arity method_matches
+                pick_method_in_lineage class_hierarchy all_funcs call_arity
+                  class_name_str method_name_str
             | None -> None)
         (* Method call: obj.method() - look up obj's class *)
         | G.DotAccess
@@ -654,30 +724,17 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
             | Some class_name ->
                 let class_name_str = match class_name with
                   | G.Id ((str, _), _) -> str
-                  | _ -> ""
+                  | G.IdQualified { name_last = ((str, _), _); _ } -> str
                 in
-                (* Find all methods matching class and name *)
-                let method_matches = List.filter (fun f ->
-                  match f.fn_id with
-                  | [Some c; Some m] when fst c.IL.ident = class_name_str && fst m.IL.ident = method_name_str -> true
-                  | _ -> false
-                ) all_funcs in
-                pick_by_arity call_arity method_matches
+                pick_method_in_lineage class_hierarchy all_funcs call_arity
+                  class_name_str method_name_str
             | None ->
                 (* For static/class calls like Java's ClassName.method(), the
                    receiver is the class name, not an object mapping. *)
-                let static_method_matches =
-                  List.filter
-                    (fun f ->
-                      match f.fn_id with
-                      | [ Some c; Some m ]
-                        when fst c.IL.ident = obj_name
-                             && fst m.IL.ident = method_name_str ->
-                          true
-                      | _ -> false)
-                    all_funcs
-                in
-                (match pick_by_arity call_arity static_method_matches with
+                (match
+                   pick_method_in_lineage class_hierarchy all_funcs call_arity
+                     obj_name method_name_str
+                 with
                 | Some _ as result -> result
                 | None ->
                     let module_paths =
@@ -731,14 +788,8 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
             in
             (match class_name_opt with
             | Some class_name ->
-                let method_matches = List.filter (fun f ->
-                  match f.fn_id with
-                  | [Some c; Some m] ->
-                      fst c.IL.ident = class_name
-                      && fst m.IL.ident = method_name
-                  | _ -> false
-                ) all_funcs in
-                pick_by_arity call_arity method_matches
+                pick_method_in_lineage class_hierarchy all_funcs call_arity
+                  class_name method_name
             | None -> None)
         | _ ->
             Log.debug (fun m ->
@@ -748,7 +799,7 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
 
 (* Extract all calls from a function body and resolve them to fn_ids *)
 let extract_calls ~(lang : Lang.t) ?(object_mappings = []) ?(module_imports = [])
-    ?(all_funcs = []) ?(caller_parent_path = [])
+    ?(class_hierarchy = []) ?(all_funcs = []) ?(caller_parent_path = [])
     (fdef : G.function_definition) : (fn_id * Tok.t) list =
   Log.debug (fun m -> m "CALL_EXTRACT: Starting extraction for function");
   let calls = ref [] in
@@ -766,7 +817,7 @@ let extract_calls ~(lang : Lang.t) ?(object_mappings = []) ?(module_imports = []
                 (* Unresolved - try to identify it as a function *)
                 (match
                    identify_callee ~lang ~object_mappings ~module_imports
-                     ~all_funcs ~caller_parent_path arg_exp
+                     ~class_hierarchy ~all_funcs ~caller_parent_path arg_exp
                  with
                 | Some fn_id ->
                     Log.debug (fun m -> m "CALL_EXTRACT: Found unresolved Id that is a function, adding as implicit call");
@@ -790,7 +841,7 @@ let extract_calls ~(lang : Lang.t) ?(object_mappings = []) ?(module_imports = []
             let call_arity = List.length args_for_resolution in
             (match
                identify_callee ~lang ~object_mappings ~module_imports
-                 ~all_funcs ~caller_parent_path ~call_arity
+                 ~class_hierarchy ~all_funcs ~caller_parent_path ~call_arity
                  callee_for_resolution
              with
             | Some fn_id ->
@@ -852,8 +903,8 @@ let extract_calls ~(lang : Lang.t) ?(object_mappings = []) ?(module_imports = []
 (* Extract calls from top-level statements (outside any function).
    This returns a list of (callee_fn_id, call_tok) pairs. *)
 let extract_toplevel_calls ~(lang : Lang.t) ?(object_mappings = [])
-    ?(module_imports = []) ?(all_funcs = []) (ast : G.program) :
-    (fn_id * Tok.t) list =
+    ?(module_imports = []) ?(class_hierarchy = []) ?(all_funcs = [])
+    (ast : G.program) : (fn_id * Tok.t) list =
   Log.debug (fun m -> m "CALL_EXTRACT: Starting extraction for top-level statements");
   let calls = ref [] in
 
@@ -900,8 +951,8 @@ let extract_toplevel_calls ~(lang : Lang.t) ?(object_mappings = [])
                 (* Top-level call - no class context *)
                 match
                   identify_callee ~lang ~object_mappings ~all_funcs
-                    ~module_imports ~caller_parent_path:[] ~call_arity
-                    callee_for_resolution
+                    ~module_imports ~class_hierarchy ~caller_parent_path:[]
+                    ~call_arity callee_for_resolution
                 with
                 | Some fn_id ->
                   let tok =
@@ -969,8 +1020,8 @@ let extract_callback_from_arg (arg_expr : G.expr) : (IL.name * Tok.t * IL.name o
   | _ -> None
 
 (* Helper to identify a callback fn_id, checking nested functions in same scope first *)
-let identify_callback ?(all_funcs = []) ?(caller_parent_path = [])
-    (callback_name : IL.name) : fn_id option =
+let identify_callback ?(class_hierarchy = []) ?(all_funcs = [])
+    ?(caller_parent_path = []) (callback_name : IL.name) : fn_id option =
   let callback_name_str = fst callback_name.IL.ident in
   (* Extract class from caller_parent_path if present *)
   let current_class = match caller_parent_path with
@@ -996,18 +1047,15 @@ let identify_callback ?(all_funcs = []) ?(caller_parent_path = [])
       let class_method_match = match current_class with
         | Some cls ->
             let class_name_str = fst cls.IL.ident in
-            List.find_opt (fun f ->
-              match f.fn_id with
-              | [Some c; Some m] when fst c.IL.ident = class_name_str && fst m.IL.ident = callback_name_str -> true
-              | _ -> false
-            ) all_funcs
+            pick_method_in_lineage class_hierarchy all_funcs None
+              class_name_str callback_name_str
         | None -> None
       in
 
       (match class_method_match with
-      | Some f ->
+      | Some fn_id ->
           Log.debug (fun m -> m "HOF_EXTRACT: Found class method callback %s" callback_name_str);
-          Some f.fn_id
+          Some fn_id
       | None ->
           (* Check for top-level function - match by string name *)
           let top_level_match = List.find_opt (fun f ->
@@ -1026,7 +1074,8 @@ let identify_callback ?(all_funcs = []) ?(caller_parent_path = [])
 
 (* Try to identify a callback from a G.argument, returning fn_id, token, and optional _tmp node.
    The _tmp node is present for Elixir ShortLambda to create the intermediate wrapper node. *)
-let try_identify_callback_arg ~all_funcs ~caller_parent_path (arg : G.argument) : (fn_id * Tok.t * IL.name option) option =
+let try_identify_callback_arg ~class_hierarchy ~all_funcs ~caller_parent_path
+    (arg : G.argument) : (fn_id * Tok.t * IL.name option) option =
   match arg with
   | G.Arg expr ->
       (* Also handle this.foo pattern *)
@@ -1038,16 +1087,21 @@ let try_identify_callback_arg ~all_funcs ~caller_parent_path (arg : G.argument) 
       (match callback_opt with
       | Some (callback_name, tok, tmp_opt) ->
           (* Use real token from the callback argument *)
-          identify_callback ~all_funcs ~caller_parent_path callback_name
+          identify_callback ~class_hierarchy ~all_funcs ~caller_parent_path
+            callback_name
           |> Option.map (fun fn_id -> (fn_id, tok, tmp_opt))
       | None -> None)
   | _ -> None
 
 (* Extract HOF callbacks from a single call expression.
    Returns list of (fn_id, tok, tmp_opt) where tmp_opt is the _tmp node for ShortLambda. *)
-let extract_hof_callbacks_from_call ~method_hofs ~function_hofs ~all_funcs
-    ~caller_parent_path (callee : G.expr) (args : G.arguments) : (fn_id * Tok.t * IL.name option) list =
-  let try_arg arg = try_identify_callback_arg ~all_funcs ~caller_parent_path arg in
+let extract_hof_callbacks_from_call ~method_hofs ~function_hofs
+    ~class_hierarchy ~all_funcs ~caller_parent_path (callee : G.expr)
+    (args : G.arguments) : (fn_id * Tok.t * IL.name option) list =
+  let try_arg arg =
+    try_identify_callback_arg ~class_hierarchy ~all_funcs ~caller_parent_path
+      arg
+  in
   let try_arg_at_index idx =
     match List.nth_opt (Tok.unbracket args) idx with
     | Some arg -> try_arg arg
@@ -1077,8 +1131,8 @@ let extract_hof_callbacks_from_call ~method_hofs ~function_hofs ~all_funcs
 
 (* Extract HOF callbacks, returning (fn_id, tok, tmp_opt) tuples.
    tmp_opt is Some IL.name for ShortLambda callbacks that need a _tmp intermediate node. *)
-let extract_hof_callbacks ?(_object_mappings = []) ?(all_funcs = [])
-    ?(caller_parent_path = [])
+let extract_hof_callbacks ?(_object_mappings = []) ?(class_hierarchy = [])
+    ?(all_funcs = []) ?(caller_parent_path = [])
     ~(lang : Lang.t) (fdef : G.function_definition) : (fn_id * Tok.t * IL.name option) list =
   let hof_configs = (Lang_config.get lang).hof_configs in
   let method_hofs =
@@ -1108,14 +1162,14 @@ let extract_hof_callbacks ?(_object_mappings = []) ?(all_funcs = [])
             let merged_args = Tok.unsafe_fake_bracket
               (Tok.unbracket inner_args @ outer_arg) in
             let found = extract_hof_callbacks_from_call
-              ~method_hofs ~function_hofs ~all_funcs ~caller_parent_path
-              callee merged_args
+              ~method_hofs ~function_hofs ~class_hierarchy ~all_funcs
+              ~caller_parent_path callee merged_args
             in
             callbacks := found @ !callbacks
         | G.Call (callee, args) ->
             let found = extract_hof_callbacks_from_call
-              ~method_hofs ~function_hofs ~all_funcs ~caller_parent_path
-              callee args
+              ~method_hofs ~function_hofs ~class_hierarchy ~all_funcs
+              ~caller_parent_path callee args
             in
             callbacks := found @ !callbacks
         | _ -> ());
@@ -1131,6 +1185,7 @@ let build_call_graph ~(lang : Lang.t) ?(object_mappings = []) (ast : G.program)
     : Call_graph.G.t =
   let graph = Call_graph.G.create () in
   let module_imports = module_imports_of_ast ast in
+  let class_hierarchy = collect_class_hierarchy ast in
 
   (* Create a special top_level node to represent code outside functions *)
   let top_level_node : node =
@@ -1169,7 +1224,7 @@ let build_call_graph ~(lang : Lang.t) ?(object_mappings = []) (ast : G.program)
           (* Extract calls - class context is already in fn_id *)
           let callee_calls =
             extract_calls ~lang ~object_mappings ~module_imports
-              ~all_funcs:funcs ~caller_parent_path:fn_id fdef
+              ~class_hierarchy ~all_funcs:funcs ~caller_parent_path:fn_id fdef
           in
 
           (* Add labeled edges for each call - edge from callee to caller for bottom-up analysis *)
@@ -1185,7 +1240,9 @@ let build_call_graph ~(lang : Lang.t) ?(object_mappings = []) (ast : G.program)
 
           (* Extract HOF callbacks and add edges: callback -> caller (or callback -> _tmp -> caller for ShortLambda) *)
           let callback_calls =
-            extract_hof_callbacks ~_object_mappings:object_mappings ~all_funcs:funcs ~caller_parent_path:fn_id ~lang fdef
+            extract_hof_callbacks ~_object_mappings:object_mappings
+              ~class_hierarchy ~all_funcs:funcs ~caller_parent_path:fn_id
+              ~lang fdef
           in
           (* Add labeled edges for each callback - edge from callback to caller for bottom-up analysis.
              For ShortLambda, create intermediate _tmp node: callback -> _tmp -> caller *)
@@ -1211,7 +1268,7 @@ let build_call_graph ~(lang : Lang.t) ?(object_mappings = []) (ast : G.program)
   (* Extract calls from top-level code (outside any function) and add edges to <top_level> *)
   let toplevel_calls =
     extract_toplevel_calls ~lang ~object_mappings ~module_imports
-      ~all_funcs:funcs ast
+      ~class_hierarchy ~all_funcs:funcs ast
   in
   List.iter
     (fun (callee_fn_id, call_tok) ->
@@ -1239,8 +1296,8 @@ let build_call_graph ~(lang : Lang.t) ?(object_mappings = []) (ast : G.program)
     in
     Visit_function_defs.fold_toplevel_calls (fun acc _call_e callee args ->
       let found = extract_hof_callbacks_from_call
-        ~method_hofs ~function_hofs ~all_funcs:funcs ~caller_parent_path:[]
-        callee args
+        ~method_hofs ~function_hofs ~class_hierarchy ~all_funcs:funcs
+        ~caller_parent_path:[] callee args
       in
       found @ acc
     ) [] ast

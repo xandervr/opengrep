@@ -1,0 +1,13 @@
+rules:
+  - id: taint_interfile_python_inheritance
+    message: Taint should flow through inherited Python methods
+    languages:
+      - python
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
