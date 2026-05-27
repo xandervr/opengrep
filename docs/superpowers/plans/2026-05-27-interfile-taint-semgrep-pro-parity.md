@@ -38,6 +38,7 @@
 - Static class-field flows now propagate for Java and C# qualified/unqualified static field reads and JavaScript qualified static field reads.
 - Higher-order callback flows are now covered for JavaScript and Python when a cross-file helper calls a callback with tainted data and either returns the callback result or lets the callback body report the sink.
 - Callback imports now resolve relative to the caller file before falling back to suffix-only matching, so repeated `source`/`apply` helpers in sibling JavaScript/Python directories no longer suppress callback findings.
+- Typed callback flows are now covered for Java, Kotlin, and C# function/delegate parameters in both callback-return and callback-body-sink forms.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -51,6 +52,7 @@
 - `9ef5934fe` - `fix: propagate static class fields` (unsigned for the same local signing issue)
 - `3f20a1c50aa0a0c422c7a8db691625bc0584c6e9` - `test: cover interfile callback taint flows` (unsigned for the same local signing issue)
 - `3b3aa6f15375c660b1fe5a2832194b00c7f57073` - `fix: resolve callback imports by caller path` (unsigned for the same local signing issue)
+- `164fb8debd063f55046f3c42be735fc544aca1b7` - `test: cover typed interfile callbacks` (unsigned for the same local signing issue)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -193,6 +195,18 @@ rules.taint_interfile_callback_collision_python    targets/taint_interfile_callb
 rules.taint_interfile_callback_collision_python    targets/taint_interfile_callback_collision/python/second/app.py    3
 ```
 
+Latest typed callback green proof after `164fb8deb`:
+
+```text
+taint_interfile_typed_callback count=6 expected=6 errors=0 interfile_lang_count=3
+rules.taint_interfile_typed_callback_csharp    targets/taint_interfile_typed_callback/csharp_return/AppReturn.cs    3
+rules.taint_interfile_typed_callback_csharp    targets/taint_interfile_typed_callback/csharp_sink/AppSink.cs    3
+rules.taint_interfile_typed_callback_java    targets/taint_interfile_typed_callback/java_return/AppReturn.java    3
+rules.taint_interfile_typed_callback_java    targets/taint_interfile_typed_callback/java_sink/AppSink.java    3
+rules.taint_interfile_typed_callback_kotlin    targets/taint_interfile_typed_callback/kotlin_return/app.kt    2
+rules.taint_interfile_typed_callback_kotlin    targets/taint_interfile_typed_callback/kotlin_sink/app.kt    2
+```
+
 Override and multi-level inheritance audit probes after `9ef5934fe`:
 
 ```text
@@ -327,6 +341,7 @@ Verified in this handoff:
 - Focused direct scans passed for Java/C#/JavaScript static class-field state.
 - Focused direct scans passed for JavaScript/Python higher-order callback flows where tainted data is passed into a callback and either returned or sunk inside the callback body.
 - Focused direct scans passed for JavaScript/Python callback imports with duplicate helper names in sibling directories.
+- Focused direct scans passed for Java/Kotlin/C# typed callbacks and delegates.
 - Direct probes passed for Java/Python/JavaScript override dispatch and multi-level inheritance.
 - Broad direct scans passed for `taint_interfile_language_matrix` with 28 findings and `taint_interfile_parser_smoke` with 13 findings.
 - `--dataflow-traces` on `taint_interfile_js` produced cross-file source, intermediate variable, and sink trace locations.
@@ -436,7 +451,37 @@ Current verification after the fix:
 - `git diff --check` passes.
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
-Next resume point: audit framework-specific object construction gaps or deeper callback/HOF forms in languages beyond JavaScript and Python.
+Next resume point: audit framework-specific object construction gaps or deeper callback/HOF forms in Ruby, Scala, Rust, Swift, PHP, Elixir, Clojure, and other configured HOF languages.
+
+---
+
+## Latest Session Update: Typed Callback Coverage Green
+
+Typed callback flows are now locked by e2e coverage for Java, Kotlin, and C#.
+
+- Java coverage uses `Function<String, String>.apply` for callback-return flow and `Consumer<String>.accept` for callback-body-sink flow.
+- Kotlin coverage uses function-type parameters with trailing lambda call sites for both return and sink forms.
+- C# coverage uses `Func<string, string>.Invoke` and `Action<string>.Invoke` delegate forms.
+
+Current targeted scan:
+
+```text
+taint_interfile_typed_callback count=6 expected=6 errors=0 interfile_lang_count=3
+rules.taint_interfile_typed_callback_csharp    targets/taint_interfile_typed_callback/csharp_return/AppReturn.cs    3
+rules.taint_interfile_typed_callback_csharp    targets/taint_interfile_typed_callback/csharp_sink/AppSink.cs    3
+rules.taint_interfile_typed_callback_java    targets/taint_interfile_typed_callback/java_return/AppReturn.java    3
+rules.taint_interfile_typed_callback_java    targets/taint_interfile_typed_callback/java_sink/AppSink.java    3
+rules.taint_interfile_typed_callback_kotlin    targets/taint_interfile_typed_callback/kotlin_return/app.kt    2
+rules.taint_interfile_typed_callback_kotlin    targets/taint_interfile_typed_callback/kotlin_sink/app.kt    2
+```
+
+Current verification after the coverage checkpoint:
+
+- Docker direct typed callback scan passes with 6 findings.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+
+Next resume point: continue HOF coverage/audit for Ruby, Scala, Rust, Swift, PHP, Elixir, Clojure, and any other configured HOF languages, or move to framework-specific object construction gaps.
 
 ---
 
