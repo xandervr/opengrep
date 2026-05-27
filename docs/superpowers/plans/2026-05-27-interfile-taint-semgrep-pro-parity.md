@@ -30,6 +30,11 @@
 - Direct Docker scans passed for JS, CommonJS, imported values, Java, Python, Go, Elixir, the 28-finding language matrix, and the 13-finding parser smoke suite.
 - `generic` and `regex` taint are now explicitly rejected with a structured `SemgrepError`, and CLI help no longer promises a fallback that cannot run.
 - JavaScript interfile sanitizer and propagator fixtures now cover imported sanitizer functions and imported side-effect propagator functions.
+- Python imported side-effect sanitizers now propagate across signatures through a `CleanLval` effect. Docker red/green proof showed `sink(data)` at line 8 disappear while `sink(unsafe)` at line 10 remains.
+
+**Latest pushed checkpoints:**
+- `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
+- `47d785905a858ea1f0ef5e22b2ae6980cdca9db4` - `fix: propagate interfile side-effect sanitizers`
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -60,6 +65,37 @@ The Docker-built help text now says:
 1. Re-run the Docker direct scan matrix from Task 4 after any further engine change.
 2. Keep `git diff --check` and `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` green.
 3. Continue auditing remaining Semgrep Pro parity gaps beyond the covered import/value/export/object/trace cases.
+
+Latest side-effect sanitizer verification:
+
+```text
+taint_interfile_python_side_effect_sanitizer count=1 expected=1 errors=0 interfile_lang_count=1
+```
+
+Latest broad Docker direct scan matrix after `47d785905`:
+
+```text
+taint_interfile_js count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_js_commonjs count=3 expected=3 errors=0 interfile_lang_count=1
+taint_interfile_js_imported_value count=2 expected=2 errors=0 interfile_lang_count=1
+taint_interfile_js_object_method count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_js_sanitizer count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_js_propagator count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_imported_value_package_collision count=2 expected=2 errors=0 interfile_lang_count=2
+taint_interfile_java count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_python count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_python_module_import count=2 expected=2 errors=0 interfile_lang_count=1
+taint_interfile_python_duplicate_names count=2 expected=2 errors=0 interfile_lang_count=1
+taint_interfile_python_class_instance count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_python_imported_value count=3 expected=3 errors=0 interfile_lang_count=1
+taint_interfile_python_wildcard_import count=2 expected=2 errors=0 interfile_lang_count=1
+taint_interfile_python_sanitizer count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_python_side_effect_sanitizer count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_go count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_elixir count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_language_matrix count=28 expected=28 errors=0 interfile_lang_count=28
+taint_interfile_parser_smoke count=13 expected=13 errors=0 interfile_lang_count=13
+```
 
 Historical generic/regex reproduction command:
 
