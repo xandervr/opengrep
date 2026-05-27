@@ -332,8 +332,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                 match (entity.G.name, var_def.G.vinit) with
                 | G.EN var_name, Some init_expr -> (
                     let class_name =
-                      extract_class_name_from_constructor init_expr lang
-                        class_names
+                      match
+                        extract_class_name_from_constructor init_expr lang
+                          class_names
+                      with
+                      | Some _ as class_name -> class_name
+                      | None -> class_name_from_object_mapping init_expr
                     in
                     let class_name =
                       match (class_name, lang) with
@@ -400,7 +404,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                   | _ -> None
                 in
                 let class_name =
-                  extract_class_name_from_constructor rval_expr lang class_names
+                  match
+                    extract_class_name_from_constructor rval_expr lang
+                      class_names
+                  with
+                  | Some _ as class_name -> class_name
+                  | None -> class_name_from_object_mapping rval_expr
                 in
                 match (var_name, class_name) with
                 | Some var, Some cls ->
@@ -435,7 +444,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
             match (entity.G.name, var_def.G.vinit) with
             | G.EN var_name, Some init_expr -> (
                 let class_name =
-                  extract_class_name_from_constructor init_expr lang class_names
+                  match
+                    extract_class_name_from_constructor init_expr lang
+                      class_names
+                  with
+                  | Some _ as class_name -> class_name
+                  | None -> class_name_from_object_mapping init_expr
                 in
                 match class_name with
                 | Some cls ->
