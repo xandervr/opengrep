@@ -208,6 +208,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let constructor_param_field_mappings = ref [] in
   let function_return_mappings = ref [] in
   let function_alias_mappings = ref [] in
+  let object_property_function_mappings = ref [] in
   let class_name_from_type (type_ : G.type_) =
     match type_.G.t with
     | G.TyN name when is_known_class name class_names -> Some name
@@ -293,6 +294,18 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
            && same_resolved_path [ field_name ] mapped_path)
     |> Option.map (fun (_obj_name, _field_path, class_name) -> class_name)
   in
+  let class_name_from_object_property_function_mapping callee_expr =
+    match object_property_path_from_expr callee_expr with
+    | Some (obj_name, field_path) ->
+        !object_property_function_mappings
+        |> List.find_opt (fun (mapped_obj, mapped_path, _func_name) ->
+               same_resolved_name obj_name mapped_obj
+               && same_resolved_path field_path mapped_path)
+        |> Option.map (fun (_obj_name, _field_path, func_name) ->
+               name_from_name_mapping function_return_mappings func_name)
+        |> Option.join
+    | None -> None
+  in
   let object_property_path_from_alias alias_name =
     let rec aux seen alias_name =
       if List.exists (same_resolved_name alias_name) seen then None
@@ -309,22 +322,28 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     aux [] alias_name
   in
   let class_name_from_function_return expr =
+    let class_name_from_function_alias () =
+      match name_from_called_function function_alias_mappings expr with
+      | Some returned_func ->
+          name_from_name_mapping function_return_mappings returned_func
+      | None -> (
+          match expr.G.e with
+          | G.Call (callee_expr, _) -> (
+              match name_from_called_function function_alias_mappings callee_expr with
+              | Some returned_func ->
+                  name_from_name_mapping function_return_mappings returned_func
+              | None -> None)
+          | _ -> None)
+    in
     match name_from_called_function function_return_mappings expr with
     | Some _ as class_name -> class_name
     | None -> (
-        match name_from_called_function function_alias_mappings expr with
-        | Some returned_func ->
-            name_from_name_mapping function_return_mappings returned_func
-        | None -> (
-            match expr.G.e with
-            | G.Call (callee_expr, _) -> (
-                match
-                  name_from_called_function function_alias_mappings callee_expr
-                with
-                | Some returned_func ->
-                    name_from_name_mapping function_return_mappings returned_func
-                | None -> None)
-            | _ -> None))
+        match expr.G.e with
+        | G.Call (callee_expr, _) -> (
+            match class_name_from_object_property_function_mapping callee_expr with
+            | Some _ as class_name -> class_name
+            | None -> class_name_from_function_alias ())
+        | _ -> class_name_from_function_alias ())
   in
   let function_alias_from_expr expr =
     match name_from_called_function function_alias_mappings expr with
@@ -469,6 +488,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                            (obj_name, field_path, class_name)
                            :: !object_property_mappings
                      | None -> ();
+                     (match function_alias_from_expr field_init with
+                     | Some func_name ->
+                         object_property_function_mappings :=
+                           (obj_name, field_path, func_name)
+                           :: !object_property_function_mappings
+                     | None -> ());
                      match field_init.G.e with
                      | G.Record (_, nested_fields, _) ->
                          record_fields field_path nested_fields
