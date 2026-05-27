@@ -34,6 +34,7 @@
 - Python inherited methods now resolve through the interfile call graph. `Graph_from_AST` builds a class hierarchy from `ClassDef.cextends` and searches subclass methods before parent methods for ordinary calls, top-level calls, chained constructor calls, static/class calls, and callback lookup.
 - Inherited constructors now resolve through class lineage. A three-language fixture covers base constructors that set tainted fields and inherited methods that return those fields on Java, JavaScript, and Python subclass instances.
 - Java unqualified instance-field access now canonicalizes `EnclosedVar` lvalues as implicit `this.<field>` for interfile signatures and local dataflow. This keeps `return value` aligned with constructor assignments to `this.value`.
+- C# and Kotlin unqualified instance-field flows now use the same implicit receiver canonicalization. Kotlin class `init` blocks and field initializers are modeled as synthetic `Class:<name>` initializer signatures so `Helper()` applies `this.<field>` effects to the constructed receiver.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -43,6 +44,7 @@
 - `49ef0429b86541142b38a2c51f2a8c1eec90530b` - `docs: record inherited interfile taint checkpoint`
 - `8efc77cbb7e34557466600e143729725f801f9c5` - `fix: resolve inherited constructors in interfile taint`
 - `5520f09144759c58ceeae51a596a58cb2ec0b62f` - `fix: track unqualified java instance fields`
+- `417d3b881d99608389b6de341746b66a972134b1` - `fix: resolve unqualified class fields across languages` (unsigned: local 1Password SSH signing and private-key fallback were blocked in this session)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -73,7 +75,7 @@ The Docker-built help text now says:
 1. Re-run the Docker direct scan matrix from Task 4 after any further engine change.
 2. Keep `git diff --check` and `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` green.
 3. Continue auditing remaining Semgrep Pro parity gaps beyond the covered import/value/export/object/trace/inheritance cases.
-4. Audit adjacent unqualified instance-field shapes outside Java, especially C# and Kotlin, before making any broad class-field parity claim.
+4. Audit remaining class-field and dispatch gaps before making any broad class-field parity claim: static fields, overrides, multi-level inheritance, and higher-order callback flows.
 
 Latest side-effect sanitizer verification:
 
@@ -122,7 +124,21 @@ taint_interfile_java_unqualified_field count=1 expected=1 errors=0 interfile_lan
 rules.taint_interfile_java_unqualified_field    targets/taint_interfile_java_unqualified_field/App.java    4
 ```
 
-Latest broad Docker direct scan matrix after `5520f0914`:
+Latest C#/Kotlin unqualified instance-field red proof before `417d3b881`:
+
+```text
+taint_interfile_unqualified_instance_field count=0 expected=2 errors=0 interfile_lang_count=2
+```
+
+Latest C#/Kotlin unqualified instance-field green proof after `417d3b881`:
+
+```text
+taint_interfile_unqualified_instance_field count=2 expected=2 errors=0 interfile_lang_count=2
+rules.taint_interfile_unqualified_instance_field_csharp    targets/taint_interfile_unqualified_instance_field/csharp/App.cs    4
+rules.taint_interfile_unqualified_instance_field_kotlin    targets/taint_interfile_unqualified_instance_field/kotlin/app.kt    3
+```
+
+Latest broad Docker direct scan matrix after `417d3b881`:
 
 ```text
 taint_interfile_js count=1 expected=1 errors=0 interfile_lang_count=1
@@ -134,6 +150,7 @@ taint_interfile_js_propagator count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_imported_value_package_collision count=2 expected=2 errors=0 interfile_lang_count=2
 taint_interfile_java count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_java_unqualified_field count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_unqualified_instance_field count=2 expected=2 errors=0 interfile_lang_count=2
 taint_interfile_python count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_python_module_import count=2 expected=2 errors=0 interfile_lang_count=1
 taint_interfile_python_duplicate_names count=2 expected=2 errors=0 interfile_lang_count=1
@@ -234,6 +251,7 @@ Verified in this handoff:
 - Focused direct scans passed for Python imported side-effect sanitizers and inherited Python methods.
 - Focused direct scans passed for inherited constructors in Java, JavaScript, and Python.
 - Focused direct scans passed for Java unqualified instance-field access through inherited constructor state.
+- Focused direct scans passed for C# and Kotlin unqualified instance-field access through constructor/class-init state.
 - Broad direct scans passed for `taint_interfile_language_matrix` with 28 findings and `taint_interfile_parser_smoke` with 13 findings.
 - `--dataflow-traces` on `taint_interfile_js` produced cross-file source, intermediate variable, and sink trace locations.
 - `--dataflow-traces` on the Vue language-matrix fixture produced cross-file source, intermediate variable, and sink trace locations.
@@ -246,6 +264,38 @@ Known boundaries:
 
 Docker-only instruction:
 - The user explicitly said to compile in Docker. Do not use local opam/dune builds as the authoritative build gate.
+
+---
+
+## Latest Session Update: C# and Kotlin Fields Green
+
+C# and Kotlin field-backed interfile flows now work when a method returns an unqualified field name.
+
+- `src/tainting/Dataflow_tainting.ml` treats Java, C#, and Kotlin `EnclosedVar` lvalues as implicit `this.<field>` lvalues and recognizes synthetic class initializers as constructor-like state producers.
+- `src/tainting/Taint_signature_extractor.ml` seeds implicit receiver method properties for the same three languages.
+- `src/engine/Match_tainting_mode.ml` creates synthetic class-initializer signatures from class field initializers and init blocks.
+- `src/tainting/Graph_from_AST.ml` resolves constructor calls to explicit lineage constructors first, then falls back to `Class:<name>` initializer nodes when no explicit constructor exists.
+- `cli/tests/default/e2e/targets/taint_interfile_unqualified_instance_field/` and `rules/taint_interfile_unqualified_instance_field.yaml` lock the C#/Kotlin regression.
+
+Current targeted scan:
+
+```text
+taint_interfile_unqualified_instance_field count=2 expected=2 errors=0 interfile_lang_count=2
+rules.taint_interfile_unqualified_instance_field_csharp    targets/taint_interfile_unqualified_instance_field/csharp/App.cs    4
+rules.taint_interfile_unqualified_instance_field_kotlin    targets/taint_interfile_unqualified_instance_field/kotlin/app.kt    3
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes.
+- Direct C#/Kotlin unqualified instance-field scan returns both expected findings.
+- Full direct regression matrix passes, including inherited constructors, Java unqualified fields, the 28-finding language matrix, and the 13-finding parser smoke suite.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+
+Commit/signing note: `417d3b881d99608389b6de341746b66a972134b1` was pushed over HTTPS. It is unsigned because the configured 1Password SSH signer failed twice with `failed to fill whole buffer`, direct SSH signing with `~/.ssh/id_ed25519` required an unavailable passphrase, and SSH push was blocked by the local agent.
+
+Next resume point: continue the class/object parity audit with static fields, overridden methods, multi-level inheritance, and higher-order callback flows.
 
 ---
 
