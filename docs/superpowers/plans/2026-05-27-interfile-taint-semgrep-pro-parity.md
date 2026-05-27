@@ -39,6 +39,7 @@
 - Higher-order callback flows are now covered for JavaScript and Python when a cross-file helper calls a callback with tainted data and either returns the callback result or lets the callback body report the sink.
 - Callback imports now resolve relative to the caller file before falling back to suffix-only matching, so repeated `source`/`apply` helpers in sibling JavaScript/Python directories no longer suppress callback findings.
 - Typed callback flows are now covered for Java, Kotlin, and C# function/delegate parameters in both callback-return and callback-body-sink forms.
+- Callback-return flows are now covered across Ruby, Scala, Rust, Swift, PHP, Elixir, and Clojure syntax forms.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -53,6 +54,7 @@
 - `3f20a1c50aa0a0c422c7a8db691625bc0584c6e9` - `test: cover interfile callback taint flows` (unsigned for the same local signing issue)
 - `3b3aa6f15375c660b1fe5a2832194b00c7f57073` - `fix: resolve callback imports by caller path` (unsigned for the same local signing issue)
 - `164fb8debd063f55046f3c42be735fc544aca1b7` - `test: cover typed interfile callbacks` (unsigned for the same local signing issue)
+- `93d972c3e694399a0093379468455639181c6bd6` - `test: cover callback language matrix` (unsigned for the same local signing issue)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -207,6 +209,19 @@ rules.taint_interfile_typed_callback_kotlin    targets/taint_interfile_typed_cal
 rules.taint_interfile_typed_callback_kotlin    targets/taint_interfile_typed_callback/kotlin_sink/app.kt    2
 ```
 
+Latest callback language-matrix green proof after `93d972c3e`:
+
+```text
+taint_interfile_callback_language_matrix count=7 expected=7 errors=0 interfile_lang_count=7
+rules.taint_interfile_callback_matrix_clojure    targets/taint_interfile_callback_language_matrix/clojure/app.clj    1
+rules.taint_interfile_callback_matrix_elixir    targets/taint_interfile_callback_language_matrix/elixir/app.ex    2
+rules.taint_interfile_callback_matrix_php    targets/taint_interfile_callback_language_matrix/php/app.php    3
+rules.taint_interfile_callback_matrix_ruby    targets/taint_interfile_callback_language_matrix/ruby/app.rb    2
+rules.taint_interfile_callback_matrix_rust    targets/taint_interfile_callback_language_matrix/rust/app.rs    1
+rules.taint_interfile_callback_matrix_scala    targets/taint_interfile_callback_language_matrix/scala/App.scala    1
+rules.taint_interfile_callback_matrix_swift    targets/taint_interfile_callback_language_matrix/swift/app.swift    1
+```
+
 Override and multi-level inheritance audit probes after `9ef5934fe`:
 
 ```text
@@ -342,6 +357,7 @@ Verified in this handoff:
 - Focused direct scans passed for JavaScript/Python higher-order callback flows where tainted data is passed into a callback and either returned or sunk inside the callback body.
 - Focused direct scans passed for JavaScript/Python callback imports with duplicate helper names in sibling directories.
 - Focused direct scans passed for Java/Kotlin/C# typed callbacks and delegates.
+- Focused direct scans passed for callback-return syntax across Ruby, Scala, Rust, Swift, PHP, Elixir, and Clojure.
 - Direct probes passed for Java/Python/JavaScript override dispatch and multi-level inheritance.
 - Broad direct scans passed for `taint_interfile_language_matrix` with 28 findings and `taint_interfile_parser_smoke` with 13 findings.
 - `--dataflow-traces` on `taint_interfile_js` produced cross-file source, intermediate variable, and sink trace locations.
@@ -481,7 +497,38 @@ Current verification after the coverage checkpoint:
 - `git diff --check` passes.
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
-Next resume point: continue HOF coverage/audit for Ruby, Scala, Rust, Swift, PHP, Elixir, Clojure, and any other configured HOF languages, or move to framework-specific object construction gaps.
+Next resume point: move to framework-specific object construction gaps, language-specific class-field edge cases, or callback-body-sink variants for the broader callback language matrix.
+
+---
+
+## Latest Session Update: Callback Language Matrix Green
+
+Callback-return flows are now locked across seven additional languages.
+
+- `cli/tests/default/e2e/rules/taint_interfile_callback_language_matrix.yaml` covers Ruby, Scala, Rust, Swift, PHP, Elixir, and Clojure.
+- The fixture uses each language's ordinary callback syntax: Ruby proc `.call`, Scala/Rust/Swift function values, PHP closure calls, Elixir `fn`, and Clojure `fn`.
+- This complements the JavaScript/Python callback fixtures and the Java/Kotlin/C# typed callback matrix.
+
+Current targeted scan:
+
+```text
+taint_interfile_callback_language_matrix count=7 expected=7 errors=0 interfile_lang_count=7
+rules.taint_interfile_callback_matrix_clojure    targets/taint_interfile_callback_language_matrix/clojure/app.clj    1
+rules.taint_interfile_callback_matrix_elixir    targets/taint_interfile_callback_language_matrix/elixir/app.ex    2
+rules.taint_interfile_callback_matrix_php    targets/taint_interfile_callback_language_matrix/php/app.php    3
+rules.taint_interfile_callback_matrix_ruby    targets/taint_interfile_callback_language_matrix/ruby/app.rb    2
+rules.taint_interfile_callback_matrix_rust    targets/taint_interfile_callback_language_matrix/rust/app.rs    1
+rules.taint_interfile_callback_matrix_scala    targets/taint_interfile_callback_language_matrix/scala/App.scala    1
+rules.taint_interfile_callback_matrix_swift    targets/taint_interfile_callback_language_matrix/swift/app.swift    1
+```
+
+Current verification after the coverage checkpoint:
+
+- Docker direct callback language-matrix scan passes with 7 findings.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+
+Next resume point: audit framework-specific object construction gaps, language-specific class-field edge cases, or callback-body-sink variants for these broader callback languages.
 
 ---
 
