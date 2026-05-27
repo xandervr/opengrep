@@ -256,25 +256,41 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
            same_resolved_name name mapped_name)
     |> Option.map snd
   in
+  let same_resolved_path path1 path2 =
+    List.length path1 = List.length path2
+    && List.for_all2 same_resolved_name path1 path2
+  in
+  let rec object_property_path_from_expr expr =
+    match expr.G.e with
+    | G.DotAccess (obj_expr, _, G.FN field_name) -> (
+        match object_property_path_from_expr obj_expr with
+        | Some (obj_name, field_path) ->
+            Some (obj_name, field_path @ [ field_name ])
+        | None -> (
+            match obj_expr.G.e with
+            | G.N obj_name -> Some (obj_name, [ field_name ])
+            | _ -> None))
+    | _ -> None
+  in
   let class_name_from_object_mapping expr =
     name_from_mapping object_mappings expr
   in
   let class_name_from_object_property_mapping expr =
-    match expr.G.e with
-    | G.DotAccess ({ e = G.N obj_name; _ }, _, G.FN field_name) ->
+    match object_property_path_from_expr expr with
+    | Some (obj_name, field_path) ->
         !object_property_mappings
-        |> List.find_opt (fun (mapped_obj, mapped_field, _class_name) ->
+        |> List.find_opt (fun (mapped_obj, mapped_path, _class_name) ->
                same_resolved_name obj_name mapped_obj
-               && same_resolved_name field_name mapped_field)
-        |> Option.map (fun (_obj_name, _field_name, class_name) -> class_name)
-    | _ -> None
+               && same_resolved_path field_path mapped_path)
+        |> Option.map (fun (_obj_name, _field_path, class_name) -> class_name)
+    | None -> None
   in
   let class_name_from_object_property_name obj_name field_name =
     !object_property_mappings
-    |> List.find_opt (fun (mapped_obj, mapped_field, _class_name) ->
+    |> List.find_opt (fun (mapped_obj, mapped_path, _class_name) ->
            same_resolved_name obj_name mapped_obj
-           && same_resolved_name field_name mapped_field)
-    |> Option.map (fun (_obj_name, _field_name, class_name) -> class_name)
+           && same_resolved_path [ field_name ] mapped_path)
+    |> Option.map (fun (_obj_name, _field_path, class_name) -> class_name)
   in
   let class_name_from_function_return expr =
     match name_from_called_function function_return_mappings expr with
@@ -409,8 +425,9 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let record_object_property_mappings obj_name init_expr =
     match init_expr.G.e with
     | G.Record (_, fields, _) ->
-        fields
-        |> List.iter (function
+        let rec record_fields field_path fields =
+          fields
+          |> List.iter (function
              | G.F
                  {
                    G.s =
@@ -421,14 +438,21 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                  } -> (
                  match field_entity.G.name with
                  | G.EN field_name -> (
+                     let field_path = field_path @ [ field_name ] in
                      match class_name_from_expr field_init with
                      | Some class_name ->
                          object_property_mappings :=
-                           (obj_name, field_name, class_name)
+                           (obj_name, field_path, class_name)
                            :: !object_property_mappings
-                     | None -> ())
+                     | None -> ();
+                     match field_init.G.e with
+                     | G.Record (_, nested_fields, _) ->
+                         record_fields field_path nested_fields
+                     | _ -> ())
                  | _ -> ())
              | _ -> ())
+        in
+        record_fields [] fields
     | _ -> ()
   in
   let record_destructured_object_property_mappings init_expr =
