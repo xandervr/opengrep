@@ -718,6 +718,47 @@ def test_interfile_taint_flows_through_static_fields(
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_callbacks(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_callback.yaml",
+        target_name="taint_interfile_callback",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = output["results"]
+
+    assert set(output["interfile_languages_used"]) == {"JavaScript", "Python"}
+    assert {
+        (result["check_id"], result["path"], result["start"]["line"])
+        for result in results
+    } == {
+        (
+            "rules.taint_interfile_callback_js",
+            "targets/taint_interfile_callback/javascript_return/app.js",
+            3,
+        ),
+        (
+            "rules.taint_interfile_callback_js",
+            "targets/taint_interfile_callback/javascript_sink/app.js",
+            3,
+        ),
+        (
+            "rules.taint_interfile_callback_python",
+            "targets/taint_interfile_callback/python_return/app.py",
+            3,
+        ),
+        (
+            "rules.taint_interfile_callback_python",
+            "targets/taint_interfile_callback/python_sink/app.py",
+            3,
+        ),
+    }
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_imported_python_module_value(
     run_semgrep_in_tmp: RunSemgrep,
 ):
