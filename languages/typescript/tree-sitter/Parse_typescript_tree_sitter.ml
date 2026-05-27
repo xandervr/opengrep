@@ -3249,20 +3249,27 @@ type cst_result =
     CST_tree_sitter_typescript.extra )
   Tree_sitter_run.Parsing_result.t
 
-let parse ?dialect file =
+let line_col_to_pos_contents contents =
+  let len = String.length contents in
+  let h = Hashtbl.create (len + 1) in
+  let line = ref 1 in
+  let column = ref 0 in
+  for bytepos = 0 to len - 1 do
+    Hashtbl.replace h (!line, !column) bytepos;
+    if Char.equal contents.[bytepos] '\n' then (
+      incr line;
+      column := 0)
+    else incr column
+  done;
+  Hashtbl.replace h (!line, !column) len;
+  Hashtbl.find h
+
+let parse_with_cst ~file ~conv cst_parser =
   let debug = false in
   H.wrap_parser
-    (fun () ->
-      let dialect = guess_dialect dialect !!file in
-      match dialect with
-      | `Typescript ->
-          let cst = Tree_sitter_typescript.Parse.file !!file in
-          (cst :> cst_result)
-      | `TSX ->
-          let cst = Tree_sitter_tsx.Parse.file !!file in
-          (cst :> cst_result))
+    cst_parser
     (fun cst _extras ->
-      let env = { H.file; conv = H.line_col_to_pos file; extra = () } in
+      let env = { H.file; conv; extra = () } in
 
       if debug then (
         Printexc.record_backtrace true;
@@ -3271,6 +3278,31 @@ let parse ?dialect file =
       match program env cst with
       | Program p -> p
       | _ -> failwith "not a program")
+
+let parse ?dialect file =
+  parse_with_cst ~file ~conv:(H.line_col_to_pos file) (fun () ->
+      let dialect = guess_dialect dialect !!file in
+      match dialect with
+      | `Typescript ->
+          let cst = Tree_sitter_typescript.Parse.file !!file in
+          (cst :> cst_result)
+      | `TSX ->
+          let cst = Tree_sitter_tsx.Parse.file !!file in
+          (cst :> cst_result))
+
+let parse_string ?dialect ~src_file contents =
+  parse_with_cst ~file:src_file ~conv:(line_col_to_pos_contents contents)
+    (fun () ->
+      let dialect = guess_dialect dialect !!src_file in
+      match dialect with
+      | `Typescript ->
+          let cst =
+            Tree_sitter_typescript.Parse.string ~src_file:!!src_file contents
+          in
+          (cst :> cst_result)
+      | `TSX ->
+          let cst = Tree_sitter_tsx.Parse.string ~src_file:!!src_file contents in
+          (cst :> cst_result))
 
 let parse_pattern str =
   H.wrap_parser

@@ -84,6 +84,30 @@ let get_source_requires src =
 
 let lazy_force x = Lazy.force x [@@profiling]
 
+let unsupported_taint_analyzer_msg =
+  "taint mode requires a dedicated parser; generic and regex analyzers do not \
+   support taint analysis"
+
+exception Unsupported_taint_analyzer
+
+let unsupported_taint_analyzer_report (rule : R.taint_rule) file =
+  let loc = Tok.first_loc_of_file file in
+  let error =
+    Core_error.mk_error ~rule_id:(fst rule.R.id)
+      ~msg:unsupported_taint_analyzer_msg ~loc OutJ.SemgrepError
+  in
+  RP.mk_match_result []
+    (Core_error.ErrorSet.singleton error)
+    (Core_profiling.empty_rule_profiling (rule :> R.rule))
+
+let normalize_match_path_to_range_file (pm : PM.t) : PM.t =
+  let start_loc, _end_loc = pm.range_loc in
+  let file = start_loc.pos.file in
+  {
+    pm with
+    path = { origin = Origin.File file; internal_path_to_content = file };
+  }
+
 (*****************************************************************************)
 (* Pattern match from finding *)
 (*****************************************************************************)
@@ -255,6 +279,9 @@ let check_fundef (taint_inst : Taint_rule_inst.t) (name : IL.name) ?glob_env ?cl
   let effects = Effects.union env_effects effects in
   (fcfg, effects, mapping)
 
+let function_id_is_top_level (fn_id : Function_id.t) : bool =
+  String.equal (Function_id.show fn_id) "<top_level>"
+
 let get_arity params info lang =
   let filtered_params =
     match (lang, info.class_name_str) with
@@ -409,13 +436,13 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
   } : Xtarget.t =
     xtarget
   in
+  try
   let lang =
     match xlang with
     | L (lang, _) -> lang
     | LSpacegrep
     | LAliengrep
-    | LRegex ->
-        failwith "taint-mode and generic/regex matching are incompatible"
+    | LRegex -> raise Unsupported_taint_analyzer
   in
   let (ast, skipped_tokens), parse_time =
     Common.with_time (fun () -> lazy_force lazy_ast_and_errors)
@@ -454,7 +481,7 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
             (infos, info_map)
           in
 
-          let _collected_infos, info_map =
+          let collected_infos, info_map =
             Visit_function_defs.fold_with_parent_path
               (fun (infos, info_map) opt_ent parent_path fdef ->
                 match fst fdef.fkind with
@@ -557,11 +584,15 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
              Use the already-computed source/sink ranges from spec_matches *)
           let source_ranges =
             spec_matches.sources
-            |> List.map (fun (rwm, _src) -> rwm.Range_with_metavars.r)
+            |> List.map (fun (rwm, _src) ->
+                   let start_loc, _end_loc = rwm.Range_with_metavars.origin.range_loc in
+                   (rwm.Range_with_metavars.r, start_loc.pos.file))
           in
           let sink_ranges =
             spec_matches.sinks
-            |> List.map (fun (rwm, _sink) -> rwm.Range_with_metavars.r)
+            |> List.map (fun (rwm, _sink) ->
+                   let start_loc, _end_loc = rwm.Range_with_metavars.origin.range_loc in
+                   (rwm.Range_with_metavars.r, start_loc.pos.file))
           in
           let source_functions =
             Graph_from_AST.find_functions_containing_ranges ~lang ast
@@ -597,6 +628,32 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
           let relevant_graph =
             Graph_reachability.compute_relevant_subgraph call_graph
               ~sources:source_functions ~sinks:sink_functions
+          in
+          let relevant_graph =
+            if List.exists function_id_is_top_level source_functions then (
+              Log.debug (fun m ->
+                  m
+                    "SUBGRAPH: Top-level source found, keeping all %d \
+                     discovered functions in analysis"
+                    (List.length collected_infos));
+              List.iter
+                (fun info ->
+                  Call_graph.G.add_vertex relevant_graph
+                    (Function_id.of_il_name info.name))
+                collected_infos;
+              relevant_graph)
+            else relevant_graph
+          in
+          let relevant_graph =
+            (* The call graph intentionally stays conservative, and some
+               language constructs such as JavaScript object-literal methods can
+               still be resolved later from taint shapes. Keep explicit source
+               and sink containers in the analysis graph so the dataflow pass
+               gets a chance to use those shapes instead of pruning the sink
+               before analysis starts. *)
+            List.iter (Call_graph.G.add_vertex relevant_graph) source_functions;
+            List.iter (Call_graph.G.add_vertex relevant_graph) sink_functions;
+            relevant_graph
           in
 
           (* Write call graph to dot file for debugging *)
@@ -670,32 +727,29 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
             match extract_multi_arity_cases info.fdef with
             | Some arity_cases ->
                 (* Multi-arity function: extract one signature per arity branch *)
-                let updated_db =
-                  List.fold_left
-                    (fun acc_db (case_params, case_body, arity) ->
-                      let synthetic_fdef : G.function_definition =
-                        {
-                          G.fparams = Tok.unsafe_fake_bracket case_params;
-                          frettype = None;
-                          fkind = info.fdef.G.fkind;
-                          fbody = case_body;
-                        }
-                      in
-                      let fdef_il =
-                        AST_to_IL.function_definition lang synthetic_fdef
-                      in
-                      let cfg = CFG_build.cfg_of_fdef fdef_il in
-                      let db', _sig =
-                        Taint_signature_extractor
-                        .extract_signature_with_file_context ~arity ~db:acc_db
-                          ?builtin_signature_db taint_inst ~name:info.name
-                          ~method_properties:info.method_properties
-                          ~call_graph:(Some relevant_graph) cfg ast
-                      in
-                      db')
-                    db arity_cases
-                in
-                run_check_fundef_if_needed info updated_db
+                List.fold_left
+                  (fun acc_db (case_params, case_body, arity) ->
+                    let synthetic_fdef : G.function_definition =
+                      {
+                        G.fparams = Tok.unsafe_fake_bracket case_params;
+                        frettype = None;
+                        fkind = info.fdef.G.fkind;
+                        fbody = case_body;
+                      }
+                    in
+                    let fdef_il =
+                      AST_to_IL.function_definition lang synthetic_fdef
+                    in
+                    let cfg = CFG_build.cfg_of_fdef fdef_il in
+                    let db', _sig =
+                      Taint_signature_extractor
+                      .extract_signature_with_file_context ~arity ~db:acc_db
+                        ?builtin_signature_db taint_inst ~name:info.name
+                        ~method_properties:info.method_properties
+                        ~call_graph:(Some relevant_graph) cfg ast
+                    in
+                    db')
+                  db arity_cases
             | None ->
                 (* Single-arity path (unchanged logic) *)
                 let params = Tok.unbracket info.fdef.fparams in
@@ -733,7 +787,7 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
                     else updated_db
                   else updated_db
                 in
-                run_check_fundef_if_needed info updated_db
+                updated_db
           in
 
           let signature_db_after_order =
@@ -762,9 +816,16 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
               initial_signature_db analysis_order
           in
 
+          let final_signature_db = signature_db_after_order in
+          List.iter
+            (fun node ->
+              match Shape_and_sig.FunctionMap.find_opt node info_map with
+              | None -> ()
+              | Some info ->
+                  ignore (run_check_fundef_if_needed info final_signature_db))
+            analysis_order;
           (* Skip the "remaining functions" phase entirely - if a function isn't
              in the relevant subgraph, we don't need to analyze it *)
-          let final_signature_db = signature_db_after_order in
           (Some final_signature_db, Some relevant_graph))
         else (
           (* Cross-function taint analysis disabled: use main branch behavior *)
@@ -848,6 +909,7 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
       in
       let matches =
         !matches
+        |> List_.map normalize_match_path_to_range_file
         (* same post-processing as for search-mode in Match_rules.ml *)
         |> PM.uniq
         |> PM.no_submatches (* see "Taint-tracking via ranges" *) |> match_hook
@@ -877,6 +939,9 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
       in
       let report = { report with explanations } in
       (Some report, final_signature_db)
+  with
+  | Unsupported_taint_analyzer ->
+      (Some (unsupported_taint_analyzer_report rule file), None)
 
 let check_rules ~match_hook
     ~(per_rule_boilerplate_fn :
@@ -897,38 +962,15 @@ let check_rules ~match_hook
          | None -> xconf.config.taint_intrafile
        in
        if has_taint_intrafile then
-         (* Warn for unsupported languages *)
-         let lang = xtarget.xlang |> Xlang.to_lang_exn in
-         match lang with
-         | Lang.Apex
-         | Lang.C
-         | Lang.Clojure
-         | Lang.Cpp
-         | Lang.Csharp
-         | Lang.Elixir
-         | Lang.Go
-         | Lang.Java
-         | Lang.Js
-         | Lang.Julia
-         | Lang.Kotlin
-         | Lang.Lua
-         | Lang.Python
-         | Lang.Ruby
-         | Lang.Rust
-         | Lang.Scala
-         | Lang.Swift
-         | Lang.Ts
-         | Lang.Vb ->
-             (* Known supported languages - no warning *)
+         match Xlang.to_lang xtarget.xlang with
+         | Ok _ ->
              ()
-         | other_lang ->
-             (* Unknown or unsupported language - warn user *)
+         | Error _ ->
              Logs.warn (fun m ->
                  m
-                   "Cross-function taint analysis (--taint-intrafile) may not \
-                    be fully supported for %s. Results may be limited to \
-                    intraprocedural analysis only."
-                   (Lang.to_string other_lang)))
+                   "Cross-function taint analysis (--taint-intrafile) is only \
+                    available for languages with a dedicated parser. Generic \
+                    and regex analyzers do not support taint mode."))
    | [] -> ());
 
   (* We create a "formula cache" here, before dealing with individual rules, to

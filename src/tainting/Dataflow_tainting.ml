@@ -1013,6 +1013,186 @@ let find_lval_taint_sources env incoming_taints lval =
   in
   (taints_to_return, lval_env)
 
+let path_segments_of_string (s : string) : string list =
+  s |> String.split_on_char '/'
+  |> List.map (String.split_on_char '\\')
+  |> List.flatten
+  |> List.filter (fun part -> part <> "" && part <> "." && part <> "..")
+
+let is_known_source_extension (ext : string) : bool =
+  match String.lowercase_ascii ext with
+  | "c"
+  | "cc"
+  | "cjs"
+  | "clj"
+  | "cljs"
+  | "cljc"
+  | "cpp"
+  | "cs"
+  | "css"
+  | "cxx"
+  | "dart"
+  | "erl"
+  | "ex"
+  | "exs"
+  | "go"
+  | "h"
+  | "hh"
+  | "hpp"
+  | "hrl"
+  | "hxx"
+  | "java"
+  | "js"
+  | "jsx"
+  | "kt"
+  | "kts"
+  | "lua"
+  | "mjs"
+  | "ml"
+  | "mli"
+  | "php"
+  | "py"
+  | "r"
+  | "rb"
+  | "rs"
+  | "scala"
+  | "sh"
+  | "swift"
+  | "ts"
+  | "tsx" ->
+      true
+  | _ -> false
+
+let remove_known_source_extension (segment : string) : string =
+  match String.rindex_opt segment '.' with
+  | Some idx when idx > 0 ->
+      let ext =
+        String.sub segment (idx + 1) (String.length segment - idx - 1)
+      in
+      if is_known_source_extension ext then String.sub segment 0 idx else segment
+  | _ -> segment
+
+let map_last f xs =
+  match List.rev xs with
+  | [] -> []
+  | last :: rev_prefix -> List.rev (f last :: rev_prefix)
+
+let import_path_parts_of_part (part : string) : string list =
+  part |> path_segments_of_string |> map_last remove_known_source_extension
+
+let import_path_parts_of_canonical (canonical : G.canonical_name) : string list
+    =
+  canonical |> List.map import_path_parts_of_part |> List.flatten
+
+let import_path_parts_of_module_name (module_name : G.module_name) :
+    string list =
+  match module_name with
+  | G.DottedName xs ->
+      xs |> List.map fst |> import_path_parts_of_canonical
+  | G.FileName (s, _) -> import_path_parts_of_part s
+
+let file_path_parts_of_tok (tok : Tok.t) : string list option =
+  if Tok.is_fake tok then None
+  else
+    Some
+      (Tok.file_of_tok tok
+      |> Fpath.rem_ext
+      |> Fpath.to_string
+      |> path_segments_of_string)
+
+let file_path_parts_of_il_name (name : IL.name) : string list option =
+  file_path_parts_of_tok (snd name.IL.ident)
+
+let list_ends_with ~suffix xs =
+  let xs_len = List.length xs in
+  let suffix_len = List.length suffix in
+  let rec drop n xs =
+    if n <= 0 then xs
+    else
+      match xs with
+      | [] -> []
+      | _ :: rest -> drop (n - 1) rest
+  in
+  suffix_len <= xs_len
+  && List.equal String.equal (drop (xs_len - suffix_len) xs) suffix
+
+let il_name_file_matches_module_path (name : IL.name) module_path_parts =
+  match file_path_parts_of_il_name name with
+  | Some file_path_parts -> (
+      match module_path_parts with
+      | [] -> false
+      | _ ->
+      list_ends_with ~suffix:module_path_parts file_path_parts
+      )
+  | _ -> false
+
+let imported_entity_path_and_export (canonical : G.canonical_name) :
+    (string list * string) option =
+  match List.rev canonical with
+  | export_name :: rev_module_path ->
+      let module_path_parts =
+        import_path_parts_of_canonical (List.rev rev_module_path)
+      in
+      (match module_path_parts with
+      | [] -> None
+      | _ -> Some (module_path_parts, export_name))
+  | _ -> None
+
+let exported_global_cells lval_env ~module_path_parts =
+  lval_env |> Lval_env.seq_of_tainted
+  |> Seq.fold_left
+       (fun matches (candidate, cell) ->
+         if il_name_file_matches_module_path candidate module_path_parts then
+           (candidate, cell) :: matches
+         else matches)
+       []
+
+let find_exported_global_cell lval_env ~module_path_parts ~export_name =
+  exported_global_cells lval_env ~module_path_parts
+  |> List.filter (fun (candidate, _) ->
+         String.equal export_name (fst candidate.IL.ident))
+  |> function
+  | [ (_, cell) ] -> Some cell
+  | _ -> None
+
+let imported_entity_global_cell lval_env (name : IL.name) =
+  match !(name.id_info.G.id_resolved) with
+  | Some (G.ImportedEntity canonical, _) ->
+      let* (module_path_parts, export_name) =
+        imported_entity_path_and_export canonical
+      in
+      find_exported_global_cell lval_env ~module_path_parts ~export_name
+  | _ -> None
+
+let imported_module_member_global_cell env lval_env (module_name : IL.name)
+    (member : IL.name) =
+  match !(module_name.id_info.G.id_resolved) with
+  | Some (G.ImportedModule canonical, _) ->
+      let module_path_parts = import_path_parts_of_canonical canonical in
+      find_exported_global_cell lval_env ~module_path_parts
+        ~export_name:(fst member.IL.ident)
+  | _ when Lang.equal env.taint_inst.lang Lang.Python ->
+      (* Python's generic naming does not currently tag `import source;
+         source.data` with ImportedModule, so match the base name against the
+         exporting file stem. *)
+      let module_path_parts =
+        import_path_parts_of_part (fst module_name.IL.ident)
+      in
+      find_exported_global_cell lval_env ~module_path_parts
+        ~export_name:(fst member.IL.ident)
+  | _ -> None
+
+let imported_global_cell_of_lval env lval_env (lval : IL.lval) =
+  match lval with
+  | { base = Var name; rev_offset = [] } ->
+      imported_entity_global_cell lval_env name
+  | {
+   base = Var module_name;
+   rev_offset = [ { o = Dot member; _ } ];
+  } ->
+      imported_module_member_global_cell env lval_env module_name member
+  | _ -> None
+
 let rec check_tainted_lval env (lval : IL.lval) :
     Taints.t * S.shape * [ `Sub of Taints.t * S.shape ] * Lval_env.t =
   let new_taints, lval_in_env, lval_shape, sub, lval_env =
@@ -1182,7 +1362,25 @@ and check_tainted_lval_aux env (lval : IL.lval) :
               (* THINK: Should we just use 'Sig.find_in_shape' directly here ?
                        We have the 'sub_shape' available. *)
               match Lval_env.find_lval lval_env lval with
-              | None -> (`None, S.Bot)
+              | None -> (
+                  match imported_global_cell_of_lval env lval_env lval with
+                  | None -> (
+                      match lval.rev_offset with
+                      | offset :: _ ->
+                          let taints =
+                            match sub_xtaint with
+                            | `Tainted taints -> taints
+                            | `Clean
+                            | `None ->
+                                Taints.empty
+                          in
+                          let offset = T.offset_of_IL offset in
+                          Shape.find_in_shape_poly ~taints [ offset ] sub_shape
+                          |> Option.value ~default:(Taints.empty, S.Bot)
+                          |> fun (taints, shape) ->
+                          (Xtaint.of_taints taints, shape)
+                      | [] -> (`None, S.Bot))
+                  | Some (S.Cell (xtaint', shape)) -> (xtaint', shape))
               | Some (Cell (xtaint', shape)) -> (xtaint', shape)
             in
             let xtaint' =
@@ -1521,6 +1719,78 @@ let check_tainted_var env (var : IL.name) : Taints.t * S.shape * Lval_env.t =
   in
   (taints, shape, lval_env)
 
+let prepend_implicit_python_receiver env fun_exp (fun_sig : Signature.t) args
+    args_taints =
+  match (env.taint_inst.lang, fun_exp.e, fun_sig.params) with
+  | ( Lang.Python,
+      Fetch { base = Var receiver; rev_offset = [ { o = Dot _; _ } ] },
+      (Signature.P ("self" | "cls") :: _ as params) )
+    when Int.equal (List.length args + 1) (List.length params) ->
+      let receiver_lval = { base = Var receiver; rev_offset = [] } in
+      let receiver_exp = { e = Fetch receiver_lval; eorig = NoOrig } in
+      let receiver_taints, receiver_shape =
+        match Lval_env.find_lval env.lval_env receiver_lval with
+        | Some (S.Cell (xtaints, shape)) -> (Xtaint.to_taints xtaints, shape)
+        | None -> (Taints.empty, S.Bot)
+      in
+      ( Unnamed receiver_exp :: args,
+        Unnamed (receiver_taints, receiver_shape) :: args_taints )
+  | _ -> (args, args_taints)
+
+let normalize_bash_command_call env fun_exp args args_taints =
+  let command_name_of_arg = function
+    | Unnamed { e = Literal (G.String (_, (cmd_name, cmd_tok), _)); _ } ->
+        Some (cmd_name, cmd_tok)
+    | _ -> None
+  in
+  match (env.taint_inst.lang, fun_exp.e, args, args_taints) with
+  | ( Lang.Bash,
+      Fetch { base = Var shell_cmd; rev_offset = [] },
+      first_arg :: rest_args,
+      _first_arg_taints :: rest_arg_taints )
+    when String.equal (fst shell_cmd.ident) "!sh_cmd!" -> (
+      match command_name_of_arg first_arg with
+      | Some (cmd_name, cmd_tok) ->
+          let cmd =
+            {
+              ident = (cmd_name, cmd_tok);
+              sid = G.SId.unsafe_default;
+              id_info = G.empty_id_info ();
+            }
+          in
+          ( { fun_exp with e = Fetch { base = Var cmd; rev_offset = [] } },
+            rest_args,
+            rest_arg_taints )
+      | None -> (fun_exp, args, args_taints))
+  | _ -> (fun_exp, args, args_taints)
+
+let bash_positional_arg_of_exp = function
+  | { e = Literal (G.Int parsed_int); _ } -> (
+      match Parsed_int.to_int_opt parsed_int with
+      | Some n when n > 0 ->
+          Some T.{ name = "$" ^ string_of_int n; index = n - 1 }
+      | _ -> None)
+  | { e = Fetch { base = Var positional; rev_offset = [] }; _ } -> (
+      match int_of_string_opt (fst positional.ident) with
+      | Some n when n > 0 ->
+          Some T.{ name = "$" ^ string_of_int n; index = n - 1 }
+      | _ -> None)
+  | _ -> None
+
+let check_bash_expand_call env fun_exp args =
+  match (env.taint_inst.lang, fun_exp.e, args) with
+  | ( Lang.Bash,
+      Fetch { base = Var expand; rev_offset = [] },
+      [ Unnamed arg_exp ] )
+    when String.equal (fst expand.ident) "!sh_expand!" -> (
+      match bash_positional_arg_of_exp arg_exp with
+      | Some arg ->
+          let taint_lval = T.{ base = BArg arg; offset = [] } in
+          let taint = T.{ orig = Var taint_lval; tokens = [] } in
+          Some (Taints.singleton taint, S.Arg arg, env.lval_env)
+      | None -> None)
+  | _ -> None
+
 (* This function is consuming the taint signature of a function to determine
    a few things:
    1) What is the status of taint in the current environment, after the function
@@ -1532,44 +1802,63 @@ let check_function_call env fun_exp args
     (args_taints : (Taints.t * S.shape) argument list)
     ?(_implicit_lambda : (IL.exp * IL.function_definition) option = None) () :
     (Taints.t * S.shape * Lval_env.t) option =
+  let fun_exp, args, args_taints =
+    normalize_bash_command_call env fun_exp args args_taints
+  in
   let arity = List.length args in
   Log.debug (fun m ->
       m "CHECK_FUNCTION_CALL: %s with arity %d, intrafile=%b"
         (Display_IL.string_of_exp fun_exp) arity
         env.taint_inst.options.taint_intrafile);
+  match check_bash_expand_call env fun_exp args with
+  | Some result -> Some result
+  | None ->
   let sig_result =
-    if env.taint_inst.options.taint_intrafile then
-      let from_db = lookup_signature env fun_exp arity in
-      match from_db with
-      | Some _ -> from_db
-      | None ->
-          (* lookup_signature failed - check if callee has a Fun shape in lval_env.
-           * This handles two cases:
-           *   callback(source())       -- direct call, lval = callback
-           *   callback.run(source())   -- invoke method, lval = callback.run
-           * For invoke methods (e.g. Java Runnable.run), strip the method offset
-           * and look up the base variable. *)
-          (match fun_exp.e with
-          | Fetch lval ->
-              let lval_to_check =
-                let invoke_methods = (Lang_config.get env.taint_inst.lang).invoke_methods in
-                match lval.rev_offset with
-                | [{ o = Dot method_name; _ }]
-                  when List.mem (fst method_name.ident) invoke_methods ->
-                    { lval with rev_offset = [] }
-                | _ -> lval
-              in
+      if env.taint_inst.options.taint_intrafile then
+        let from_db = lookup_signature env fun_exp arity in
+        match from_db with
+        | Some _ -> from_db
+        | None ->
+            (* lookup_signature failed - check if callee has a Fun shape in lval_env.
+             * This handles two cases:
+             *   callback(source())       -- direct call, lval = callback
+             *   callback.run(source())   -- invoke method, lval = callback.run
+             * For invoke methods (e.g. Java Runnable.run), strip the method offset
+             * and look up the base variable. *)
+            (match fun_exp.e with
+            | Fetch lval ->
+                let lval_to_check =
+                  let invoke_methods =
+                    (Lang_config.get env.taint_inst.lang).invoke_methods
+                  in
+                  match lval.rev_offset with
+                  | [ { o = Dot method_name; _ } ]
+                    when List.mem (fst method_name.ident) invoke_methods ->
+                      { lval with rev_offset = [] }
+                  | _ -> lval
+                in
               (match Lval_env.find_lval env.lval_env lval_to_check with
-              | Some (S.Cell (_, S.Fun fun_sig)) ->
-                  Log.debug (fun m ->
-                      m "SIG_FROM_SHAPE: Found Fun shape for %s"
-                        (Display_IL.string_of_exp fun_exp));
-                  Some fun_sig
-              | _ -> None)
-          | _ -> None)
-    else None
-  in
-  match sig_result with
+                | Some (S.Cell (_, S.Fun fun_sig)) ->
+                    Log.debug (fun m ->
+                        m "SIG_FROM_SHAPE: Found Fun shape for %s"
+                          (Display_IL.string_of_exp fun_exp));
+                    Some fun_sig
+                | _ ->
+                    let _taints, shape, _sub, _lval_env =
+                      check_tainted_lval env lval_to_check
+                    in
+                    (match shape with
+                    | S.Fun fun_sig ->
+                        Log.debug (fun m ->
+                            m
+                              "SIG_FROM_SHAPE: Found computed Fun shape for %s"
+                              (Display_IL.string_of_exp fun_exp));
+                        Some fun_sig
+                    | _ -> None))
+            | _ -> None)
+      else None
+    in
+    match sig_result with
   | Some fun_sig ->
       Log.debug (fun m ->
           m "SIG_FOUND: %s -> %s"
@@ -1579,6 +1868,9 @@ let check_function_call env fun_exp args
         if env.taint_inst.options.taint_intrafile then
           lookup_signature env exp arity
         else None
+      in
+      let args, args_taints =
+        prepend_implicit_python_receiver env fun_exp fun_sig args args_taints
       in
       let* call_effects =
         Sig_inst.instantiate_function_signature env.lval_env fun_sig

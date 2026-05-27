@@ -749,6 +749,88 @@ let sca_rules_filtering (target : Target.regular) (rules : Rule.t list) :
   let rules = rules_with_dep_matches |> List_.map fst in
   (rules, dependency_match_table)
 
+let is_interfile_taint_rule (rule : Rule.t) : bool =
+  match (rule.mode, rule.options) with
+  | `Taint _, Some opts -> opts.interfile
+  | _ -> false
+
+let supports_interfile_taint (xlang : Xlang.t) : bool =
+  match xlang with
+  | Xlang.L _ -> true
+  | _ -> false
+
+let interfile_rule_applies_to_analyzer (interfile_rules : Rule.t list)
+    (analyzer : Xlang.t) : bool =
+  interfile_rules
+  |> List.exists (fun (rule : Rule.t) ->
+         Xlang.is_compatible ~require:analyzer ~provide:rule.target_analyzer)
+
+let build_interfile_asts_by_analyzer (targets : Target.t list)
+    (valid_rules : Rule.t list) :
+    (Lang.t, AST_generic.program * Tok.location list) Hashtbl.t =
+  let asts_by_analyzer = Hashtbl.create 8 in
+  let interfile_rules = List.filter is_interfile_taint_rule valid_rules in
+  if not (List_.null interfile_rules) then
+    targets
+    |> List.iter (function
+         | Target.Lockfile _ -> ()
+         | Target.Regular target
+           when supports_interfile_taint target.analyzer
+                && interfile_rule_applies_to_analyzer interfile_rules
+                     target.analyzer -> (
+             try
+               let lang = Xlang.to_lang_exn target.analyzer in
+               let ast, skipped_tokens =
+                 parse_and_resolve_name lang target.path.internal_path_to_content
+               in
+               let asts, skipped =
+                 match Hashtbl.find_opt asts_by_analyzer lang with
+                 | None -> ([], [])
+                 | Some (asts, skipped) -> (asts, skipped)
+               in
+               Hashtbl.replace asts_by_analyzer lang
+                 (ast @ asts, skipped_tokens @ skipped)
+             with
+             | exn ->
+                 Logs.debug (fun m ->
+                     m "Skipping interfile taint preparse for %s: %s"
+                       !!(target.path.internal_path_to_content)
+                       (Common.exn_to_s exn)))
+         | Target.Regular _ -> ());
+  asts_by_analyzer
+
+let interfile_ast_for_target asts_by_analyzer (target : Target.regular) :
+    (AST_generic.program * Tok.location list) option =
+  match Xlang.to_lang target.analyzer with
+  | Ok lang when supports_interfile_taint target.analyzer ->
+      Hashtbl.find_opt asts_by_analyzer lang
+  | Ok _
+  | Error _ ->
+      None
+
+let keep_matches_in_file (file : Fpath.t)
+    (result : Core_result.matches_single_file) :
+    Core_result.matches_single_file =
+  let filtered_matches =
+    result.matches
+    |> List.filter (fun (pm : PM.t) ->
+           let start_loc, _end_loc = pm.range_loc in
+           Fpath.equal start_loc.pos.file file)
+  in
+  { result with matches = filtered_matches }
+
+let empty_matches_single_file : Core_result.matches_single_file =
+  { matches = []; errors = ESet.empty; profiling = None; explanations = [] }
+
+let combine_match_results (a : Core_result.matches_single_file)
+    (b : Core_result.matches_single_file) : Core_result.matches_single_file =
+  {
+    matches = a.matches @ b.matches;
+    errors = ESet.union a.errors b.errors;
+    explanations = a.explanations @ b.explanations;
+    profiling = None;
+  }
+
 (*****************************************************************************)
 (* a "core" scan *)
 (*****************************************************************************)
@@ -756,6 +838,8 @@ let sca_rules_filtering (target : Target.regular) (rules : Rule.t list) :
 (* build the callback for iter_targets_and_get_matches_and_exn_to_errors *)
 let mk_target_handler (caps : < Cap.time_limit >) (config : Core_scan_config.t)
     (valid_rules : Rule.t list)
+    (interfile_asts_by_analyzer :
+      (Lang.t, AST_generic.program * Tok.location list) Hashtbl.t)
     (prefilter_cache_opt : Match_env.prefilter_config) : target_handler =
   function
   | Lockfile ({ path; kind } as lockfile) ->
@@ -805,6 +889,12 @@ let mk_target_handler (caps : < Cap.time_limit >) (config : Core_scan_config.t)
         }
       in
       let rules, dependency_match_table = sca_rules_filtering target rules in
+      let interfile_ast = interfile_ast_for_target interfile_asts_by_analyzer target in
+      let interfile_rules, regular_rules =
+        rules
+        |> List.partition (fun rule ->
+               is_interfile_taint_rule rule && Option.is_some interfile_ast)
+      in
       let timeout =
         let caps = (caps :> < Cap.time_limit >) in
         Some
@@ -821,8 +911,27 @@ let mk_target_handler (caps : < Cap.time_limit >) (config : Core_scan_config.t)
       in
       let matches : Core_result.matches_single_file =
         (* !!Calling Match_rules!! Calling the matching engine!! *)
-        Match_rules.check ~match_hook ~timeout ~dependency_match_table xconf
-          rules xtarget
+        let regular_matches =
+          if List_.null regular_rules then empty_matches_single_file
+          else
+            Match_rules.check ~match_hook ~timeout ~dependency_match_table xconf
+              regular_rules xtarget
+        in
+        let interfile_matches =
+          match interfile_rules, interfile_ast with
+          | [], _
+          | _, None ->
+              empty_matches_single_file
+          | _ :: _, Some ast ->
+              let interfile_xconf =
+                { xconf with filter_irrelevant_rules = NoPrefiltering }
+              in
+              let interfile_xtarget = Xtarget.resolve_with_ast (lazy ast) target in
+              Match_rules.check ~match_hook ~timeout ~dependency_match_table
+                interfile_xconf interfile_rules interfile_xtarget
+              |> keep_matches_in_file file
+        in
+        combine_match_results regular_matches interfile_matches
       in
       (* Add file size when profiling is on. *)
       let matches =
@@ -866,6 +975,9 @@ let scan_exn (caps : < caps ; .. >) (config : Core_scan_config.t)
 
   (* !!Let's go!! *)
   log_scan_inputs config ~targets ~skipped ~valid_rules ~invalid_rules;
+  let interfile_asts_by_analyzer =
+    build_interfile_asts_by_analyzer targets valid_rules
+  in
   let prefilter_cache_opt =
     if config.filter_irrelevant_rules then
       (* NOTE: In the fork based Parmap model, this is not really shared between
@@ -889,15 +1001,19 @@ let scan_exn (caps : < caps ; .. >) (config : Core_scan_config.t)
          config
          (mk_target_handler
             (caps :> < Cap.time_limit >)
-            config valid_rules prefilter_cache_opt)
+            config valid_rules interfile_asts_by_analyzer prefilter_cache_opt)
   in
 
   (* TODO: Delete any lockfile-only findings whose rule produced a code+lockfile
      finding in that lockfile in scanned_targets?
   *)
 
-  (* the OSS engine was invoked so no interfile langs *)
-  let interfile_languages_used = [] in
+  let interfile_languages_used =
+    interfile_asts_by_analyzer
+    |> Hashtbl.to_seq_keys
+    |> Seq.map Xlang.of_lang
+    |> List.of_seq
+  in
   let (res : Core_result.t) =
     Core_result.mk_result file_results
       (List_.map (fun r -> (r, `OSS)) valid_rules)

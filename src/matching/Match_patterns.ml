@@ -54,6 +54,14 @@ type env = {
   has_as_metavariable : bool;
 }
 
+let path_for_range (path : Target.path) ((start_loc, _) : PM.range_loc) :
+    Target.path =
+  let file = start_loc.Tok.pos.file in
+  match path.origin with
+  | Origin.File _ when not (Fpath.equal file path.internal_path_to_content) ->
+      { origin = Origin.File file; internal_path_to_content = file }
+  | _ -> path
+
 (*****************************************************************************)
 (* Debugging *)
 (*****************************************************************************)
@@ -180,6 +188,7 @@ let match_rules_and_recurse
                 | Some range_loc ->
                     let tokens = lazy (AST_generic_helpers.ii_of_any (any x)) in
                     let rule_id = rule_id_of_mini_rule rule in
+                    let path = path_for_range path range_loc in
                     let pm =
                       {
                         PM.rule_id;
@@ -375,6 +384,7 @@ class ['self] check_visitor range_filter m_env has_as_metavariable
                           lazy (AST_generic_helpers.ii_of_any (E x))
                         in
                         let rule_id = rule_id_of_mini_rule rule in
+                        let path = path_for_range path range_loc in
                         let pm =
                           {
                             PM.rule_id;
@@ -437,6 +447,7 @@ class ['self] check_visitor range_filter m_env has_as_metavariable
                         in
                         let facts = get_facts_of_stmt x in
                         let rule_id = rule_id_of_mini_rule rule in
+                        let path = path_for_range path range_loc in
                         let pm =
                           {
                             PM.rule_id;
@@ -499,6 +510,7 @@ class ['self] check_visitor range_filter m_env has_as_metavariable
                               lazy (list_original_tokens_stmts matched)
                             in
                             let rule_id = rule_id_of_mini_rule rule in
+                            let path = path_for_range path range_loc in
                             let pm =
                               {
                                 PM.rule_id;
@@ -605,6 +617,7 @@ class ['self] check_visitor range_filter m_env has_as_metavariable
                               lazy (list_original_tokens_stmts matched)
                             in
                             let rule_id = rule_id_of_mini_rule rule in
+                            let path = path_for_range path range_loc in
                             let pm =
                               {
                                 PM.rule_id;

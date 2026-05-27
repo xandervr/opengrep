@@ -23,6 +23,51 @@ let extract_lambda_assignment (e : G.expr) : (G.entity * G.function_definition) 
   | G.Assign ({ e = G.N (G.Id (id, id_info)); _ }, _, { e = G.Lambda fdef; _ }) ->
       let ent = { G.name = G.EN (G.Id (id, id_info)); G.attrs = []; G.tparams = None } in
       Some (ent, fdef)
+  | G.Assign
+      ( {
+          e =
+            G.DotAccess
+              ( { e = G.N (G.Id (("module", _), _)); _ },
+                _,
+                G.FN (G.Id (("exports", tok), id_info)) );
+          _;
+        },
+        _,
+        { e = G.Lambda fdef; _ } ) ->
+      let ent =
+        {
+          G.name = G.EN (G.Id (("module.exports", tok), id_info));
+          attrs = [];
+          tparams = None;
+        }
+      in
+      Some (ent, fdef)
+  | G.Assign
+      ( {
+          e =
+            G.DotAccess
+              ( {
+                  e =
+                    G.DotAccess
+                      ( { e = G.N (G.Id (("module", _), _)); _ },
+                        _,
+                        G.FN (G.Id (("exports", _), _)) );
+                  _;
+                },
+                _,
+                G.FN (G.Id ((export_name, export_tok), export_id_info)) );
+          _;
+        },
+        _,
+        { e = G.Lambda fdef; _ } ) ->
+      let ent =
+        {
+          G.name = G.EN (G.Id ((export_name, export_tok), export_id_info));
+          attrs = [];
+          tparams = None;
+        }
+      in
+      Some (ent, fdef)
   (* This one was added for Clojure, but may apply to more translations. *)
   | G.LetPattern (pat, { e = G.Lambda fdef; _ }) ->
       let ent = H.entity_of_pattern pat in
@@ -70,7 +115,8 @@ class ['self] visitor_with_class_context =
 
     method! visit_definition f ((ent, def_kind) as def) =
       match def_kind with
-      | G.ClassDef _cdef ->
+      | G.ClassDef _
+      | G.ModuleDef _ ->
           let old_class = !current_class in
           (current_class :=
              match ent.name with
@@ -199,7 +245,8 @@ class ['self] visitor_with_parent_path =
 
     method! visit_definition f ((ent, def_kind) as def) =
       match def_kind with
-      | G.ClassDef _cdef ->
+      | G.ClassDef _
+      | G.ModuleDef _ ->
           let newv =
             match ent.name with
             | EN name -> Some name

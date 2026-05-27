@@ -1,0 +1,13 @@
+rules:
+  - id: taint_interfile_js
+    message: Taint should flow through imported helpers
+    languages:
+      - js
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

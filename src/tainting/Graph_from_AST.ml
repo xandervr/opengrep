@@ -34,6 +34,12 @@ type func_info = {
   fdef : G.function_definition;
 }
 
+type module_import = {
+  import_file : Fpath.t;
+  local_name : string;
+  module_path_parts : string list;
+}
+
 (* Position-aware equality for fn_id paths. Compares function identifiers
    using both name AND source position (file, line, column) via Function_id.equal. *)
 let equal_with_pos f1 f2 =
@@ -48,6 +54,240 @@ let equal_with_pos f1 f2 =
 let get_func_arity (fdef : G.function_definition) : int =
   let params = fdef.fparams in
   List.length (Tok.unbracket params)
+
+let path_segments_of_string (s : string) : string list =
+  s |> String.split_on_char '/'
+  |> List.map (String.split_on_char '\\')
+  |> List.flatten
+  |> List.filter (fun part -> part <> "" && part <> "." && part <> "..")
+
+let is_known_source_extension (ext : string) : bool =
+  match String.lowercase_ascii ext with
+  | "c"
+  | "cc"
+  | "cjs"
+  | "clj"
+  | "cljs"
+  | "cljc"
+  | "cpp"
+  | "cs"
+  | "css"
+  | "cxx"
+  | "dart"
+  | "erl"
+  | "ex"
+  | "exs"
+  | "go"
+  | "h"
+  | "hh"
+  | "hpp"
+  | "hrl"
+  | "hxx"
+  | "java"
+  | "js"
+  | "jsx"
+  | "kt"
+  | "kts"
+  | "lua"
+  | "mjs"
+  | "ml"
+  | "mli"
+  | "php"
+  | "py"
+  | "r"
+  | "rb"
+  | "rs"
+  | "scala"
+  | "sh"
+  | "swift"
+  | "ts"
+  | "tsx" ->
+      true
+  | "vue" ->
+      true
+  | _ -> false
+
+let remove_known_source_extension (segment : string) : string =
+  match String.rindex_opt segment '.' with
+  | Some idx when idx > 0 ->
+      let ext =
+        String.sub segment (idx + 1) (String.length segment - idx - 1)
+      in
+      if is_known_source_extension ext then String.sub segment 0 idx else segment
+  | _ -> segment
+
+let map_last f xs =
+  match List.rev xs with
+  | [] -> []
+  | last :: rev_prefix -> List.rev (f last :: rev_prefix)
+
+let import_path_parts_of_part (part : string) : string list =
+  part |> path_segments_of_string |> map_last remove_known_source_extension
+
+let import_path_parts_of_canonical (canonical : G.canonical_name) : string list
+    =
+  canonical |> List.map import_path_parts_of_part |> List.flatten
+
+let file_path_parts_of_tok (tok : Tok.t) : string list option =
+  if Tok.is_fake tok then None
+  else
+    Some
+      (Tok.file_of_tok tok
+      |> Fpath.rem_ext
+      |> Fpath.to_string
+      |> path_segments_of_string)
+
+let file_path_parts_of_il_name (name : IL.name) : string list option =
+  file_path_parts_of_tok (snd name.IL.ident)
+
+let list_ends_with ~suffix xs =
+  let xs_len = List.length xs in
+  let suffix_len = List.length suffix in
+  let rec drop n xs =
+    if n <= 0 then xs
+    else
+      match xs with
+      | [] -> []
+      | _ :: rest -> drop (n - 1) rest
+  in
+  suffix_len <= xs_len
+  && List.equal String.equal (drop (xs_len - suffix_len) xs) suffix
+
+let il_name_file_matches_module_path (name : IL.name) module_path_parts =
+  match file_path_parts_of_il_name name with
+  | Some file_path_parts -> (
+      match module_path_parts with
+      | [] -> false
+      | _ -> list_ends_with ~suffix:module_path_parts file_path_parts)
+  | _ -> false
+
+let fn_id_file_matches_tok (fn_id : fn_id) (tok : Tok.t) : bool =
+  match get_fn_name fn_id, file_path_parts_of_tok tok with
+  | Some name, Some call_path_parts -> (
+      match file_path_parts_of_il_name name with
+      | Some fn_path_parts -> List.equal String.equal fn_path_parts call_path_parts
+      | None -> false)
+  | _ -> false
+
+let fn_id_matches_imported_entity (canonical : G.canonical_name)
+    (fn_id : fn_id) : bool =
+  match (List.rev canonical, get_fn_name fn_id) with
+  | imported_name :: rev_module_path, Some fn_name ->
+      String.equal imported_name (fst fn_name.IL.ident)
+      && il_name_file_matches_module_path fn_name
+           (import_path_parts_of_canonical (List.rev rev_module_path))
+  | _ -> false
+
+let fn_id_matches_imported_module_export (canonical : G.canonical_name)
+    (fn_id : fn_id) : bool =
+  match get_fn_name fn_id with
+  | Some fn_name ->
+      String.equal (fst fn_name.IL.ident) "module.exports"
+      && il_name_file_matches_module_path fn_name
+           (import_path_parts_of_canonical canonical)
+  | _ -> false
+
+let module_path_parts_of_canonical (canonical : G.canonical_name) :
+    string list option =
+  match import_path_parts_of_canonical canonical with
+  | [] -> None
+  | module_path_parts -> Some module_path_parts
+
+let module_import_of_directive (dir : G.directive) : module_import option =
+  match dir.d with
+  | G.ImportAs (_, G.DottedName xs, alias_opt) -> (
+      match (xs, alias_opt) with
+      | [], _ -> None
+      | (first_name, first_tok) :: _, None ->
+          Some
+            {
+              import_file = Tok.file_of_tok first_tok;
+              local_name = first_name;
+              module_path_parts =
+                xs |> List.map fst |> import_path_parts_of_canonical;
+            }
+      | _, Some ((alias_name, alias_tok), _) ->
+          Some
+            {
+              import_file = Tok.file_of_tok alias_tok;
+              local_name = alias_name;
+              module_path_parts =
+                xs |> List.map fst |> import_path_parts_of_canonical;
+            })
+  | _ -> None
+
+let module_imports_of_ast (ast : G.program) : module_import list =
+  ast
+  |> List.filter_map (function
+       | { G.s = G.DirectiveStmt dir; _ } -> module_import_of_directive dir
+       | _ -> None)
+
+let module_paths_for_receiver ~(module_imports : module_import list) obj_name
+    obj_tok (obj_id_info : G.id_info) : string list list =
+  match !(obj_id_info.G.id_resolved) with
+  | Some (G.ImportedModule canonical, _) ->
+      module_path_parts_of_canonical canonical |> Option.to_list
+  | _ ->
+      module_imports
+      |> List.filter_map (fun import ->
+             if
+               String.equal import.local_name obj_name
+               && Fpath.equal import.import_file (Tok.file_of_tok obj_tok)
+             then Some import.module_path_parts
+             else None)
+
+let fn_id_matches_module_member module_paths member_name (fn_id : fn_id) :
+    bool =
+  match fn_id with
+  | [ None; Some fn_name ] ->
+      String.equal member_name (fst fn_name.IL.ident)
+      && List.exists
+           (fun module_path_parts ->
+             il_name_file_matches_module_path fn_name module_path_parts)
+           module_paths
+  | _ -> false
+
+let bash_command_name_of_arg = function
+  | G.Arg { e = G.L (G.String (_, (cmd_name, cmd_tok), _)); _ } ->
+      Some (cmd_name, cmd_tok)
+  | _ -> None
+
+let normalize_bash_command_call_for_graph ~(lang : Lang.t) (callee : G.expr)
+    (args_list : G.argument list) : G.expr * G.argument list =
+  match (lang, callee.G.e, args_list) with
+  | ( Lang.Bash,
+      G.N (G.Id (("!sh_cmd!", _), _)),
+      first_arg :: rest_args ) -> (
+      match bash_command_name_of_arg first_arg with
+      | Some (cmd_name, cmd_tok) ->
+          let cmd_callee =
+            {
+              callee with
+              G.e =
+                G.N
+                  (G.Id
+                     ( (cmd_name, cmd_tok),
+                       G.empty_id_info () ));
+            }
+          in
+          (cmd_callee, rest_args)
+      | None -> (callee, args_list))
+  | _ -> (callee, args_list)
+
+let token_of_resolved_call ~(lang : Lang.t) ~(original_call : G.expr)
+    (callee : G.expr) : Tok.t =
+  match callee.G.e with
+  | G.DotAccess (_, _, G.FN (G.Id (("new", _), _)))
+    when Lang.(lang =*= Ruby) -> (
+      match AST_generic_helpers.ii_of_any (G.E original_call) with
+      | tok :: _ -> tok
+      | [] -> Tok.unsafe_fake_tok "")
+  | G.DotAccess (_, _, G.FN (G.Id ((_, method_tok), _))) -> method_tok
+  | G.N (G.Id ((_, tok), _)) -> tok
+  | _ -> (
+      match AST_generic_helpers.ii_of_any (G.E original_call) with
+      | tok :: _ -> tok
+      | [] -> Tok.unsafe_fake_tok "")
 
 (* Disambiguate among candidate functions matching a call site by name.
    [matches] are the candidates; [call_arity] is the number of arguments
@@ -95,6 +335,47 @@ let pick_by_arity (call_arity : int option) (matches : func_info list)
               (List.length matches));
           None)
 
+let pick_by_file_then_arity (call_tok : Tok.t) (call_arity : int option)
+    (matches : func_info list) : fn_id option =
+  let same_file_matches =
+    matches |> List.filter (fun f -> fn_id_file_matches_tok f.fn_id call_tok)
+  in
+  match same_file_matches with
+  | _ :: _ -> pick_by_arity call_arity same_file_matches
+  | [] -> pick_by_arity call_arity matches
+
+let pick_imported_match (id_info : G.id_info) (call_arity : int option)
+    (all_funcs : func_info list) : fn_id option =
+  match !(id_info.G.id_resolved) with
+  | Some (G.ImportedEntity canonical, _) ->
+      let matches =
+        all_funcs
+        |> List.filter (fun f -> fn_id_matches_imported_entity canonical f.fn_id)
+      in
+      let result = pick_by_arity call_arity matches in
+      Option.iter
+        (fun fn_id ->
+          Log.debug (fun m ->
+              m "CALL_EXTRACT: Resolved imported call %s to %s"
+                (String.concat "." canonical) (show_fn_id fn_id)))
+        result;
+      result
+  | Some (G.ImportedModule canonical, _) ->
+      let matches =
+        all_funcs
+        |> List.filter (fun f ->
+               fn_id_matches_imported_module_export canonical f.fn_id)
+      in
+      let result = pick_by_arity call_arity matches in
+      Option.iter
+        (fun fn_id ->
+          Log.debug (fun m ->
+              m "CALL_EXTRACT: Resolved imported module call %s to %s"
+                (String.concat "." canonical) (show_fn_id fn_id)))
+        result;
+      result
+  | _ -> None
+
 (* Graph node type - reuse from Call_graph for consistency *)
 type node = Call_graph.node
 
@@ -104,8 +385,7 @@ let fn_id_to_node (fn_id : fn_id) : node option =
   | Some name :: _ -> Some (Function_id.of_il_name name)
   | _ -> None
 
-(* Equality for fn_id using compare_fn_id *)
-let equal_fn_id f1 f2 = Int.equal (compare_fn_id f1 f2) 0
+let equal_fn_id = equal_with_pos
 
 (* Extract Go receiver type from method *)
 let extract_go_receiver_type (fdef : G.function_definition) : string option =
@@ -204,8 +484,9 @@ let resolve_constructor_from_type ~(lang : Lang.t) ~all_funcs (ty : G.type_) : f
         | _ -> false
       ) all_funcs |> Option.map (fun f -> f.fn_id)
 
-let identify_callee ~(lang : Lang.t) ?(object_mappings = []) ?(all_funcs = [])
-    ?(caller_parent_path = []) ?(call_arity : int option) (callee : G.expr) : fn_id option =
+let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
+    ?(module_imports = []) ?(all_funcs = []) ?(caller_parent_path = [])
+    ?(call_arity : int option) (callee : G.expr) : fn_id option =
   (* Extract class from caller_parent_path if present *)
   let current_class = match caller_parent_path with
     | Some cls :: _ -> Some cls
@@ -213,68 +494,107 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = []) ?(all_funcs = [])
   in
   match callee.G.e with
     (* Simple function call: foo() *)
-    | G.N (G.Id ((id, _), _id_info)) ->
+    | G.N (G.Id ((id, call_tok), id_info)) ->
         let callee_name_str = id in
-        (* First check if it's a nested function in the same scope.
-           Use position-aware match to distinguish same-named parent functions. *)
-        let nested_match =
-          List.find_opt (fun f ->
-            match List_.init_and_last_opt f.fn_id with
-            | Some (f_parent, Some name) when String.equal (fst name.IL.ident) callee_name_str ->
-                equal_with_pos f_parent caller_parent_path
-            | _ -> false
-          ) all_funcs
-        in
-        begin
+        let fallback () =
+          (* First check if it's a nested function in the same scope.
+             Use position-aware match to distinguish same-named parent functions. *)
+          let nested_match =
+            List.find_opt
+              (fun f ->
+                match List_.init_and_last_opt f.fn_id with
+                | Some (f_parent, Some name)
+                  when String.equal (fst name.IL.ident) callee_name_str ->
+                    equal_with_pos f_parent caller_parent_path
+                | _ -> false)
+              all_funcs
+          in
           match nested_match with
           | Some f ->
-              Log.debug (fun m -> m "CALL_EXTRACT: Found nested function %s in same scope" callee_name_str);
+              Log.debug (fun m ->
+                  m "CALL_EXTRACT: Found nested function %s in same scope"
+                    callee_name_str);
               Some f.fn_id
-          | None ->
+          | None -> (
               (* For class-based languages, foo() might be an implicit this.foo() call.
                  Check if a method with this name exists in the current class. *)
               match current_class with
               | Some class_name ->
                   let class_name_str = fst class_name.IL.ident in
                   (* Check if this method exists in the class - use string matching *)
-                  let method_match = List.find_opt (fun f ->
-                      match f.fn_id with
-                      | [Some c; Some m] when fst c.IL.ident = class_name_str && fst m.IL.ident = callee_name_str -> true
-                      | _ -> false
-                  ) all_funcs in
+                  let method_match =
+                    List.find_opt
+                      (fun f ->
+                        match f.fn_id with
+                        | [ Some c; Some m ]
+                          when fst c.IL.ident = class_name_str
+                               && fst m.IL.ident = callee_name_str ->
+                            true
+                        | _ -> false)
+                      all_funcs
+                  in
                   (* Debug: show all function names *)
                   let all_names =
-                      all_funcs
-                      |> List.map (fun f -> show_fn_id f.fn_id)
-                      |> String.concat ", "
+                    all_funcs
+                    |> List.map (fun f -> show_fn_id f.fn_id)
+                    |> String.concat ", "
                   in
-                  Log.debug (fun m -> m "CALL_EXTRACT: In class %s, call to %s, checking %d funcs, method_exists=%b, ALL: [%s]"
-                      class_name_str callee_name_str (List.length all_funcs) (Option.is_some method_match) all_names);
+                  Log.debug (fun m ->
+                      m
+                        "CALL_EXTRACT: In class %s, call to %s, checking %d funcs, method_exists=%b, ALL: [%s]"
+                        class_name_str callee_name_str (List.length all_funcs)
+                        (Option.is_some method_match) all_names);
                   (match method_match with
                   | Some f -> Some f.fn_id
                   | None ->
                       (* It's a free function call, not a method - use string matching *)
-                      let free_fn_match = List.find_opt (fun f ->
-                          match f.fn_id with
-                          | [None; Some name] when fst name.IL.ident = callee_name_str -> true
-                          | _ -> false
-                      ) all_funcs in
-                      Option.map (fun f -> f.fn_id) free_fn_match)
-              | None ->
+                      let free_fn_matches =
+                        List.filter
+                          (fun f ->
+                            match f.fn_id with
+                            | [ None; Some name ]
+                              when fst name.IL.ident = callee_name_str ->
+                                true
+                            | _ -> false)
+                          all_funcs
+                      in
+                      pick_by_file_then_arity call_tok call_arity
+                        free_fn_matches)
+              | None -> (
                   (* Top-level free function - use string matching *)
-                  let free_fn_match =
-                    List.find_opt (fun f ->
-                      match f.fn_id with
-                      | [None; Some name] when fst name.IL.ident = callee_name_str -> true
-                      | _ -> false
-                    ) all_funcs in
-                  (match Option.map (fun f -> f.fn_id) free_fn_match with
+                  let free_fn_matches =
+                    List.filter
+                      (fun f ->
+                        match f.fn_id with
+                        | [ None; Some name ]
+                          when fst name.IL.ident = callee_name_str ->
+                            true
+                        | _ -> false)
+                      all_funcs
+                  in
+                  match
+                    pick_by_file_then_arity call_tok call_arity
+                      free_fn_matches
+                  with
                   | Some _ as r -> r
                   | None ->
-                      (* Try as constructor: ClassName() → ClassName#__init__ etc. *)
-                      let ty = G.{ t = TyN (G.Id ((callee_name_str, G.fake callee_name_str), G.empty_id_info ())); t_attrs = [] } in
-                      resolve_constructor_from_type ~lang ~all_funcs ty)
-        end
+                      (* Try as constructor: ClassName() -> ClassName#__init__ etc. *)
+                      let ty =
+                        G.
+                          {
+                            t =
+                              TyN
+                                (G.Id
+                                   ( (callee_name_str, G.fake callee_name_str),
+                                     G.empty_id_info () ));
+                            t_attrs = [];
+                          }
+                      in
+                      resolve_constructor_from_type ~lang ~all_funcs ty))
+        in
+        (match pick_imported_match id_info call_arity all_funcs with
+        | Some _ as imported_match -> imported_match
+        | None -> fallback ())
         (* Qualified call: Module.foo() *)
         | G.N (G.IdQualified { name_last = (id, _), _; _ }) ->
             let callee_name_str = id in
@@ -305,7 +625,7 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = []) ?(all_funcs = [])
             | None -> None)
         (* Method call: obj.method() - look up obj's class *)
         | G.DotAccess
-            ( { e = G.N (G.Id ((obj_name, _), obj_id_info)); _ },
+            ( { e = G.N (G.Id ((obj_name, obj_tok), obj_id_info)); _ },
               _,
               G.FN (G.Id ((id, _), _id_info)) ) ->
             let method_name_str = id in
@@ -344,9 +664,48 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = []) ?(all_funcs = [])
                 ) all_funcs in
                 pick_by_arity call_arity method_matches
             | None ->
-                (* obj not in object_mappings — try as ClassName.new() constructor *)
-                let ty = G.{ t = TyN (G.Id ((obj_name, G.fake obj_name), G.empty_id_info ())); t_attrs = [] } in
-                resolve_constructor_from_type ~lang ~all_funcs ty)
+                (* For static/class calls like Java's ClassName.method(), the
+                   receiver is the class name, not an object mapping. *)
+                let static_method_matches =
+                  List.filter
+                    (fun f ->
+                      match f.fn_id with
+                      | [ Some c; Some m ]
+                        when fst c.IL.ident = obj_name
+                             && fst m.IL.ident = method_name_str ->
+                          true
+                      | _ -> false)
+                    all_funcs
+                in
+                (match pick_by_arity call_arity static_method_matches with
+                | Some _ as result -> result
+                | None ->
+                    let module_paths =
+                      module_paths_for_receiver ~module_imports obj_name obj_tok
+                        obj_id_info
+                    in
+                    let module_function_matches =
+                      all_funcs
+                      |> List.filter (fun f ->
+                             fn_id_matches_module_member module_paths
+                               method_name_str f.fn_id)
+                    in
+                    (match pick_by_arity call_arity module_function_matches with
+                    | Some _ as result -> result
+                    | None ->
+                        (* obj not in object_mappings — try as ClassName.new() constructor *)
+                        let ty =
+                          G.
+                            {
+                              t =
+                                TyN
+                                  (G.Id
+                                     ( (obj_name, G.fake obj_name),
+                                       G.empty_id_info () ));
+                              t_attrs = [];
+                            }
+                        in
+                        resolve_constructor_from_type ~lang ~all_funcs ty)))
         (* Chained call: Constructor(...).method() — receiver is a constructor.
            Python/Kotlin/Scala: ClassName(args).method()
            Java/JS/TS/C#:       new ClassName(args).method()
@@ -388,7 +747,8 @@ let identify_callee ~(lang : Lang.t) ?(object_mappings = []) ?(all_funcs = [])
             None
 
 (* Extract all calls from a function body and resolve them to fn_ids *)
-let extract_calls ~(lang : Lang.t) ?(object_mappings = []) ?(all_funcs = []) ?(caller_parent_path = [])
+let extract_calls ~(lang : Lang.t) ?(object_mappings = []) ?(module_imports = [])
+    ?(all_funcs = []) ?(caller_parent_path = [])
     (fdef : G.function_definition) : (fn_id * Tok.t) list =
   Log.debug (fun m -> m "CALL_EXTRACT: Starting extraction for function");
   let calls = ref [] in
@@ -404,7 +764,10 @@ let extract_calls ~(lang : Lang.t) ?(object_mappings = []) ?(all_funcs = []) ?(c
             (match !(id_info.G.id_resolved) with
             | None ->
                 (* Unresolved - try to identify it as a function *)
-                (match identify_callee ~lang ~object_mappings ~all_funcs ~caller_parent_path arg_exp with
+                (match
+                   identify_callee ~lang ~object_mappings ~module_imports
+                     ~all_funcs ~caller_parent_path arg_exp
+                 with
                 | Some fn_id ->
                     Log.debug (fun m -> m "CALL_EXTRACT: Found unresolved Id that is a function, adding as implicit call");
                     calls := (fn_id, tok) :: !calls
@@ -421,27 +784,19 @@ let extract_calls ~(lang : Lang.t) ?(object_mappings = []) ?(all_funcs = []) ?(c
         match e.G.e with
         | G.Call (callee, args) ->
             let (_, args_list, _) = args in
-            let call_arity = List.length args_list in
-            (match identify_callee ~lang ~object_mappings ~all_funcs ~caller_parent_path ~call_arity callee with
+            let callee_for_resolution, args_for_resolution =
+              normalize_bash_command_call_for_graph ~lang callee args_list
+            in
+            let call_arity = List.length args_for_resolution in
+            (match
+               identify_callee ~lang ~object_mappings ~module_imports
+                 ~all_funcs ~caller_parent_path ~call_arity
+                 callee_for_resolution
+             with
             | Some fn_id ->
-                (* For DotAccess calls, use the method name token so it
-                   matches the method_tok lookup in get_signature_for_object.
-                   Exception: Ruby's ClassName.new() — use the class name
-                   token (top of expression) since the constructor machinery
-                   uses tok_of_eorig which points to the class name. *)
                 let tok =
-                  match callee.G.e with
-                  | G.DotAccess (_, _, G.FN (G.Id (("new", _), _)))
-                    when Lang.(lang =*= Ruby) ->
-                      (match AST_generic_helpers.ii_of_any (G.E e) with
-                      | tok :: _ -> tok
-                      | [] -> Tok.unsafe_fake_tok "")
-                  | G.DotAccess (_, _, G.FN (G.Id ((_, method_tok), _))) ->
-                      method_tok
-                  | _ ->
-                      (match AST_generic_helpers.ii_of_any (G.E e) with
-                      | tok :: _ -> tok
-                      | [] -> Tok.unsafe_fake_tok "")
+                  token_of_resolved_call ~lang ~original_call:e
+                    callee_for_resolution
                 in
                 calls := (fn_id, tok) :: !calls
             | None ->
@@ -496,7 +851,9 @@ let extract_calls ~(lang : Lang.t) ?(object_mappings = []) ?(all_funcs = []) ?(c
 
 (* Extract calls from top-level statements (outside any function).
    This returns a list of (callee_fn_id, call_tok) pairs. *)
-let extract_toplevel_calls ~(lang : Lang.t) ?(object_mappings = []) ?(all_funcs = []) (ast : G.program) : (fn_id * Tok.t) list =
+let extract_toplevel_calls ~(lang : Lang.t) ?(object_mappings = [])
+    ?(module_imports = []) ?(all_funcs = []) (ast : G.program) :
+    (fn_id * Tok.t) list =
   Log.debug (fun m -> m "CALL_EXTRACT: Starting extraction for top-level statements");
   let calls = ref [] in
 
@@ -507,13 +864,16 @@ let extract_toplevel_calls ~(lang : Lang.t) ?(object_mappings = []) ?(all_funcs 
     match AST_generic_helpers.range_of_any_opt (G.S body_stmt) with
     | Some (loc_start, loc_end) ->
         let range = Range.range_of_token_locations loc_start loc_end in
-        func_ranges := (range.start, range.end_) :: !func_ranges
+        func_ranges := (loc_start.pos.file, range.start, range.end_) :: !func_ranges
     | None -> ())
     all_funcs;
 
   (* Check if a position is inside any function body *)
-  let is_inside_function pos =
-    List.exists (fun (start, stop) -> pos >= start && pos <= stop) !func_ranges
+  let is_inside_function file pos =
+    List.exists
+      (fun (func_file, start, stop) ->
+        Fpath.equal file func_file && pos >= start && pos <= stop)
+      !func_ranges
   in
 
   let v =
@@ -523,25 +883,39 @@ let extract_toplevel_calls ~(lang : Lang.t) ?(object_mappings = []) ?(all_funcs 
       method! visit_expr env e =
         match e.G.e with
         | G.Call (callee, args) ->
+            let _, args_list, _ = args in
+            let callee_for_resolution, args_for_resolution =
+              normalize_bash_command_call_for_graph ~lang callee args_list
+            in
+            let call_arity = List.length args_for_resolution in
             (* Check if this call is at top-level (not inside a function) *)
             let call_pos =
               match AST_generic_helpers.ii_of_any (G.E e) with
-              | tok :: _ when not (Tok.is_fake tok) -> Tok.bytepos_of_tok tok
-              | _ -> -1
+              | tok :: _ when not (Tok.is_fake tok) ->
+                  Some (Tok.file_of_tok tok, Tok.bytepos_of_tok tok)
+              | _ -> None
             in
-            if call_pos >= 0 && not (is_inside_function call_pos) then (
-              (* Top-level call - no class context *)
-              match identify_callee ~lang ~object_mappings ~all_funcs ~caller_parent_path:[] callee with
-              | Some fn_id ->
+            (match call_pos with
+            | Some (file, pos) when not (is_inside_function file pos) -> (
+                (* Top-level call - no class context *)
+                match
+                  identify_callee ~lang ~object_mappings ~all_funcs
+                    ~module_imports ~caller_parent_path:[] ~call_arity
+                    callee_for_resolution
+                with
+                | Some fn_id ->
                   let tok =
-                    match AST_generic_helpers.ii_of_any (G.E e) with
-                    | tok :: _ -> tok
-                    | [] -> Tok.unsafe_fake_tok ""
+                    token_of_resolved_call ~lang ~original_call:e
+                      callee_for_resolution
                   in
-                  Log.debug (fun m -> m "CALL_EXTRACT: Found top-level call to %s" (show_fn_id fn_id));
-                  calls := (fn_id, tok) :: !calls
-              | None -> ()
-            );
+                  Log.debug (fun m ->
+                      m "CALL_EXTRACT: Found top-level call to %s"
+                        (show_fn_id fn_id));
+                    calls := (fn_id, tok) :: !calls
+                | None -> ())
+            | Some _
+            | None ->
+                ());
             (* Continue visiting arguments for nested calls *)
             super#visit_arguments env args
         | _ -> super#visit_expr env e
@@ -756,6 +1130,7 @@ let extract_hof_callbacks ?(_object_mappings = []) ?(all_funcs = [])
 let build_call_graph ~(lang : Lang.t) ?(object_mappings = []) (ast : G.program)
     : Call_graph.G.t =
   let graph = Call_graph.G.create () in
+  let module_imports = module_imports_of_ast ast in
 
   (* Create a special top_level node to represent code outside functions *)
   let top_level_node : node =
@@ -793,7 +1168,8 @@ let build_call_graph ~(lang : Lang.t) ?(object_mappings = []) (ast : G.program)
 
           (* Extract calls - class context is already in fn_id *)
           let callee_calls =
-            extract_calls ~lang ~object_mappings ~all_funcs:funcs ~caller_parent_path:fn_id fdef
+            extract_calls ~lang ~object_mappings ~module_imports
+              ~all_funcs:funcs ~caller_parent_path:fn_id fdef
           in
 
           (* Add labeled edges for each call - edge from callee to caller for bottom-up analysis *)
@@ -833,7 +1209,10 @@ let build_call_graph ~(lang : Lang.t) ?(object_mappings = []) (ast : G.program)
     ast;
 
   (* Extract calls from top-level code (outside any function) and add edges to <top_level> *)
-  let toplevel_calls = extract_toplevel_calls ~lang ~object_mappings ~all_funcs:funcs ast in
+  let toplevel_calls =
+    extract_toplevel_calls ~lang ~object_mappings ~module_imports
+      ~all_funcs:funcs ast
+  in
   List.iter
     (fun (callee_fn_id, call_tok) ->
       match fn_id_to_node callee_fn_id with
@@ -976,9 +1355,11 @@ let build_call_graph ~(lang : Lang.t) ?(object_mappings = []) (ast : G.program)
 
 (* Identify functions that contain byte ranges (from pattern matches) *)
 let find_functions_containing_ranges ~(lang : Lang.t) (ast : G.program)
-    (ranges : Range.t list) : Function_id.t list =
+    (ranges : (Range.t * Fpath.t) list) : Function_id.t list =
   (* Hash table to track ALL functions containing each range, along with function size *)
-  let range_to_funcs : (Range.t, (fn_id * int) list) Hashtbl.t = Hashtbl.create 10 in
+  let range_to_funcs : ((Range.t * Fpath.t), (fn_id * int) list) Hashtbl.t =
+    Hashtbl.create 10
+  in
   List.iter (fun range -> Hashtbl.add range_to_funcs range []) ranges;
 
   let visitor = object (self)
@@ -1002,6 +1383,14 @@ let find_functions_containing_ranges ~(lang : Lang.t) (ast : G.program)
 
     method! visit_definition (env : unit) ((ent, def_kind) as def) =
       match def_kind with
+      | G.ModuleDef _ ->
+          let old_class = !current_class in
+          (current_class :=
+             match ent.name with
+             | EN name -> Some name
+             | _ -> None);
+          super#visit_definition env def;
+          current_class := old_class
       | G.ClassDef cdef ->
           let old_class = !current_class in
           (current_class :=
@@ -1015,13 +1404,16 @@ let find_functions_containing_ranges ~(lang : Lang.t) (ast : G.program)
           (match cbody_range_opt with
           | Some (loc_start, loc_end) ->
               let range = Range.range_of_token_locations loc_start loc_end in
+              let class_file = loc_start.pos.file in
               let class_start = range.start in
               let class_end = range.end_ in
               let class_size = class_end - class_start in
 
               (* For each range, check if it's inside this class *)
-              List.iter (fun (range : Range.t) ->
-                if class_start <= range.Range.start && range.Range.end_ <= class_end then (
+              List.iter (fun ((range, match_file) : Range.t * Fpath.t) ->
+                if Fpath.equal class_file match_file
+                   && class_start <= range.Range.start
+                   && range.Range.end_ <= class_end then (
                   (* This class contains this range - add it to the list *)
                   match !current_class with
                   | Some class_g_name ->
@@ -1032,9 +1424,10 @@ let find_functions_containing_ranges ~(lang : Lang.t) (ast : G.program)
                         Some IL.{ ident = ("Class:" ^ class_str, fake_tok); sid = G.SId.unsafe_default; id_info = AST_generic.empty_id_info () }
                       in
                       let class_fn_id = [None; class_node_name] in
-                      let existing = Hashtbl.find range_to_funcs range in
+                      let key = (range, match_file) in
+                      let existing = Hashtbl.find range_to_funcs key in
                       if not (List.exists (fun (fid, _) -> equal_fn_id fid class_fn_id) existing) then
-                        Hashtbl.replace range_to_funcs range ((class_fn_id, class_size) :: existing)
+                        Hashtbl.replace range_to_funcs key ((class_fn_id, class_size) :: existing)
                   | None -> ()
                 )
               ) ranges;
@@ -1048,13 +1441,16 @@ let find_functions_containing_ranges ~(lang : Lang.t) (ast : G.program)
           (match func_range_opt with
           | Some (loc_start, loc_end) ->
               let range = Range.range_of_token_locations loc_start loc_end in
+              let func_file = loc_start.pos.file in
               let func_start = range.start in
               let func_end = range.end_ in
               let func_size = func_end - func_start in
 
               (* For each range, check if it's inside this function *)
-              List.iter (fun (range : Range.t) ->
-                if func_start <= range.Range.start && range.Range.end_ <= func_end then (
+              List.iter (fun ((range, match_file) : Range.t * Fpath.t) ->
+                if Fpath.equal func_file match_file
+                   && func_start <= range.Range.start
+                   && range.Range.end_ <= func_end then (
                   (* This function contains this range - add it to the list *)
                   (* Use proper parent_path tracking for nested functions *)
                   let class_il = Option.bind !current_class self#g_name_to_il_name in
@@ -1065,9 +1461,10 @@ let find_functions_containing_ranges ~(lang : Lang.t) (ast : G.program)
                   in
                   match fn_id_of_entity ~lang (Some ent) visitor_parent_path fdef with
                   | Some fn_id ->
-                      let existing = Hashtbl.find range_to_funcs range in
+                      let key = (range, match_file) in
+                      let existing = Hashtbl.find range_to_funcs key in
                       if not (List.exists (fun (fid, _) -> equal_fn_id fid fn_id) existing) then
-                        Hashtbl.replace range_to_funcs range ((fn_id, func_size) :: existing)
+                        Hashtbl.replace range_to_funcs key ((fn_id, func_size) :: existing)
                   | None -> ()
                 )
               ) ranges;
@@ -1089,7 +1486,67 @@ let find_functions_containing_ranges ~(lang : Lang.t) (ast : G.program)
               (* Restore parent_path *)
               parent_path := old_path
           | None -> super#visit_definition env def)
+
       | _ -> super#visit_definition env def
+
+    method! visit_expr env e =
+      match Visit_function_defs.extract_lambda_assignment e with
+      | Some (ent, fdef) ->
+          let func_range_opt = AST_generic_helpers.range_of_any_opt (G.E e) in
+          (match func_range_opt with
+          | Some (loc_start, loc_end) ->
+              let range = Range.range_of_token_locations loc_start loc_end in
+              let func_file = loc_start.pos.file in
+              let func_start = range.start in
+              let func_end = range.end_ in
+              let func_size = func_end - func_start in
+
+              List.iter
+                (fun ((range, match_file) : Range.t * Fpath.t) ->
+                  if
+                    Fpath.equal func_file match_file
+                    && func_start <= range.Range.start
+                    && range.Range.end_ <= func_end
+                  then
+                    let class_il =
+                      Option.bind !current_class self#g_name_to_il_name
+                    in
+                    let visitor_parent_path =
+                      match !parent_path with
+                      | [] -> [ class_il ]
+                      | _ -> !parent_path
+                    in
+                    match
+                      fn_id_of_entity ~lang (Some ent) visitor_parent_path fdef
+                    with
+                    | Some fn_id ->
+                        let key = (range, match_file) in
+                        let existing = Hashtbl.find range_to_funcs key in
+                        if
+                          not
+                            (List.exists
+                               (fun (fid, _) -> equal_fn_id fid fn_id)
+                               existing)
+                        then
+                          Hashtbl.replace range_to_funcs key
+                            ((fn_id, func_size) :: existing)
+                    | None -> ())
+                ranges
+          | None -> ());
+
+          let old_path = !parent_path in
+          let class_il = Option.bind !current_class self#g_name_to_il_name in
+          let func_il = self#entity_to_il_name ent in
+          let current_fn_id =
+            match !parent_path with
+            | [] -> [ class_il; func_il ]
+            | _ -> !parent_path @ [ func_il ]
+          in
+          parent_path := current_fn_id;
+          let body = AST_generic_helpers.funcbody_to_stmt fdef.G.fbody in
+          self#visit_stmt env body;
+          parent_path := old_path
+      | None -> super#visit_expr env e
   end in
 
   visitor#visit_program () ast;
@@ -1106,7 +1563,7 @@ let find_functions_containing_ranges ~(lang : Lang.t) (ast : G.program)
                   id_info = AST_generic.empty_id_info () }
       in
       let top_level_fn_id = [None; top_level_name] in
-      if List.mem top_level_fn_id matching_funcs then
+      if List.exists (equal_fn_id top_level_fn_id) matching_funcs then
         matching_funcs
       else
         top_level_fn_id :: matching_funcs
@@ -1116,7 +1573,7 @@ let find_functions_containing_ranges ~(lang : Lang.t) (ast : G.program)
         List.sort (fun (_, size1) (_, size2) -> compare size1 size2) funcs_list
       in
       let (innermost_fn_id, _) = List.hd sorted in
-      if List.mem innermost_fn_id matching_funcs then
+      if List.exists (equal_fn_id innermost_fn_id) matching_funcs then
         matching_funcs
       else
         innermost_fn_id :: matching_funcs

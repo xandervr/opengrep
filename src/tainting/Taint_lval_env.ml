@@ -24,7 +24,24 @@ module Taints = T.Taint_set
 module H = IL_helpers
 module Var_env = Dataflow_var_env
 module VarMap = Var_env.VarMap
-module NameMap = IL.NameMap
+
+let file_of_name (name : IL.name) : string option =
+  let tok = snd name.ident in
+  if Tok.is_fake tok then None else Some (Tok.file_of_tok tok |> Fpath.to_string)
+
+let compare_name_for_taint (name1 : IL.name) (name2 : IL.name) : int =
+  match IL.compare_name name1 name2 with
+  | 0 -> (
+      match (file_of_name name1, file_of_name name2) with
+      | Some file1, Some file2 -> String.compare file1 file2
+      | _ -> 0)
+  | cmp -> cmp
+
+module NameMap = Map.Make (struct
+  type t = IL.name
+
+  let compare = compare_name_for_taint
+end)
 open Shape_and_sig.Shape
 module Shape = Taint_shape
 

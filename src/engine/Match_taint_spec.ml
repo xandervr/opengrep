@@ -335,7 +335,7 @@ let option_bind_list opt f =
   | None -> []
   | Some x -> f x
 
-let range_of_any any =
+let range_and_file_of_any any =
   (* This is potentially slow. We may need to store range position in
    * the AST at some point. *)
   match AST_generic_helpers.range_of_any_opt any with
@@ -351,7 +351,14 @@ let range_of_any any =
       None
   | Some (tok1, tok2) ->
       let r = Range.range_of_token_locations tok1 tok2 in
-      Some r
+      Some (r, tok1.pos.file)
+
+let range_of_any any =
+  range_and_file_of_any any |> Option.map fst
+
+let file_of_range_with_metavars (rwm : RM.t) : Fpath.t =
+  let start_loc, _end_loc = rwm.origin.range_loc in
+  start_loc.pos.file
 
 (* Assuming that `r` is a subrange of `match_range` then this computes a
  * float in [0.0, 1.0]. We expect `r` to be the range of some arbitrary
@@ -367,10 +374,13 @@ let overlap_with ~match_range r =
 
 let any_is_in_matches_OSS rule matches ~get_id any =
   let ( let* ) = option_bind_list in
-  let* r = range_of_any any in
+  let* r, any_file = range_and_file_of_any any in
   matches
   |> List_.filter_map (fun (rwm, spec) ->
-         if Range.( $<=$ ) r rwm.RM.r then
+         if
+           Fpath.equal any_file (file_of_range_with_metavars rwm)
+           && Range.( $<=$ ) r rwm.RM.r
+         then
            Some
              (let spec_pm = RM.range_to_pattern_match_adjusted rule rwm in
               let overlap = overlap_with ~match_range:rwm.RM.r r in
@@ -399,14 +409,17 @@ let mk_propagator_match rule (prop : propagator_match) var kind r =
  * taint propagation more precise and predictable. *)
 let any_is_in_propagators_matches_OSS rule matches any :
     Taint_rule_inst.a_propagator Taint_spec_match.t list =
-  match range_of_any any with
+  match range_and_file_of_any any with
   | None -> []
-  | Some r ->
+  | Some (r, any_file) ->
       matches
       |> List.concat_map (fun prop ->
              let var = prop.id in
-             let is_from = is_exact_match ~match_range:prop.from r in
-             let is_to = is_exact_match ~match_range:prop.to_ r in
+             let same_file =
+               Fpath.equal any_file (file_of_range_with_metavars prop.rwm)
+             in
+             let is_from = same_file && is_exact_match ~match_range:prop.from r in
+             let is_to = same_file && is_exact_match ~match_range:prop.to_ r in
              let mk_match kind = mk_propagator_match rule prop var kind r in
              (if is_from then [ mk_match `From ] else [])
              @ (if is_to then [ mk_match `To ] else [])

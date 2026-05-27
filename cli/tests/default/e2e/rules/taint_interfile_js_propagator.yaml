@@ -1,0 +1,16 @@
+rules:
+  - id: taint_interfile_js_propagator
+    message: Taint should flow through imported JavaScript propagators
+    severity: WARNING
+    mode: taint
+    languages: [javascript]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-propagators:
+      - pattern: $S.push($A)
+        from: $A
+        to: $S
+    pattern-sinks:
+      - pattern: sink(...)

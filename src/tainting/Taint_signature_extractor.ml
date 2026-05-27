@@ -208,6 +208,78 @@ let mk_param_assumptions ?taint_inst (params : IL.param list) : Taint_lval_env.t
   in
   env
 
+let max_bash_arg_index_in_taint acc (taint : Taint.taint) =
+  match taint.Taint.orig with
+  | Taint.Var { base = Taint.BArg { index; _ }; _ } when index >= 0 -> (
+      match acc with
+      | None -> Some index
+      | Some prev -> Some (max prev index))
+  | _ -> acc
+
+let max_bash_arg_index_in_taints acc taints =
+  Taint.Taint_set.fold
+    (fun taint acc -> max_bash_arg_index_in_taint acc taint)
+    taints acc
+
+let max_bash_arg_index_in_shape acc = function
+  | Shape.Arg { index; _ } when index >= 0 -> (
+      match acc with
+      | None -> Some index
+      | Some prev -> Some (max prev index))
+  | _ -> acc
+
+let max_bash_arg_index_in_effect acc = function
+  | Effect.ToReturn return_info ->
+      let acc =
+        max_bash_arg_index_in_taints acc return_info.data_taints
+      in
+      max_bash_arg_index_in_shape acc return_info.data_shape
+  | Effect.ToSink sink_info ->
+      let taints_items, _ = sink_info.taints_with_precondition in
+      taints_items
+      |> List.fold_left
+           (fun acc (item : Effect.taint_to_sink_item) ->
+             max_bash_arg_index_in_taint acc item.taint)
+           acc
+  | Effect.ToLval (taints, lval) ->
+      let acc = max_bash_arg_index_in_taints acc taints in
+      (match lval.Taint.base with
+      | Taint.BArg { index; _ } when index >= 0 -> (
+          match acc with
+          | None -> Some index
+          | Some prev -> Some (max prev index))
+      | _ -> acc)
+  | Effect.ToSinkInCall { args_taints; _ } ->
+      args_taints
+      |> List.fold_left
+           (fun acc arg ->
+             match arg with
+             | IL.Unnamed (taints, shape)
+             | IL.Named (_, (taints, shape)) ->
+                 let acc = max_bash_arg_index_in_taints acc taints in
+                 max_bash_arg_index_in_shape acc shape)
+           acc
+
+let add_bash_implicit_params_from_effects lang params effects =
+  if not (Lang.equal lang Lang.Bash) then params
+  else
+    let max_index =
+      Effects.fold
+        (fun eff acc -> max_bash_arg_index_in_effect acc eff)
+        effects None
+    in
+    match max_index with
+    | None -> params
+    | Some max_index ->
+        let needed = max_index + 1 in
+        if List.length params >= needed then params
+        else
+          let existing = List.length params in
+          params
+          @ List.init (needed - existing) (fun i ->
+                let n = existing + i + 1 in
+                Signature.P ("$" ^ string_of_int n))
+
 let extract_signature (taint_inst : TRI.t) ?(in_env : Taint_lval_env.t option)
     ?(name : IL.name option) ?(signature_db : signature_database option)
     ?(builtin_signature_db : Shape_and_sig.builtin_signature_database option)
@@ -215,6 +287,25 @@ let extract_signature (taint_inst : TRI.t) ?(in_env : Taint_lval_env.t option)
     (func_cfg : IL.fun_cfg) : extraction_result =
   let params = Signature.of_IL_params func_cfg.params in
   let param_assumptions = mk_param_assumptions ~taint_inst func_cfg.params in
+  let normalize_file file = Fpath.to_string (Fpath.normalize file) in
+  let function_file =
+    match name with
+    | None -> None
+    | Some name ->
+        let file, _line, _col =
+          Function_id.to_file_line_col (Function_id.of_il_name name)
+        in
+        if String.equal file "unknown" then None else Some file
+  in
+  let sink_is_in_function_file (sink_info : Effect.taints_to_sink) =
+    match function_file with
+    | None -> true
+    | Some function_file ->
+        let start_loc, _end_loc =
+          sink_info.sink.pm.Core_match.range_loc
+        in
+        String.equal function_file (normalize_file start_loc.pos.file)
+  in
   let combined_env =
     match in_env with
     | Some env -> Taint_lval_env.union env param_assumptions
@@ -230,41 +321,43 @@ let extract_signature (taint_inst : TRI.t) ?(in_env : Taint_lval_env.t option)
          (fun acc eff ->
            match eff with
            | Effect.ToSink sink_info ->
-               let param_labels = extract_param_labels_from_sink sink_info in
-               if param_labels <> [] then
-                 let filtered_labels =
-                   List.filter (fun label -> label <> "__SOURCE__") param_labels
-                 in
-                 let unique_labels =
-                   List.sort_uniq String.compare filtered_labels
-                 in
-                 let param_precondition =
-                   match unique_labels with
-                   | [] -> Rule.PBool true
-                   | [ label ] -> Rule.PVariable label
-                   | labels ->
-                       Rule.POr (List.map (fun l -> Rule.PVariable l) labels)
-                 in
-                 let taints_items, existing_precondition =
-                   sink_info.taints_with_precondition
-                 in
-                 (* Note there might be existing preconditions and we do not lose them. *)
-                 let combined_precondition =
-                   match (existing_precondition, param_precondition) with
-                   | Rule.PBool true, p -> p
-                   | Rule.PLabel "__SOURCE__", p -> p
-                   | e, Rule.PBool true -> e
-                   | e, p -> Rule.PAnd [ e; p ]
-                 in
-                 let updated_sink_info =
-                   {
-                     sink_info with
-                     taints_with_precondition =
-                       (taints_items, combined_precondition);
-                   }
-                 in
-                 Effects.add (Effect.ToSink updated_sink_info) acc
-               else Effects.add eff acc
+               if not (sink_is_in_function_file sink_info) then acc
+               else
+                 let param_labels = extract_param_labels_from_sink sink_info in
+                 if param_labels <> [] then
+                   let filtered_labels =
+                     List.filter (fun label -> label <> "__SOURCE__") param_labels
+                   in
+                   let unique_labels =
+                     List.sort_uniq String.compare filtered_labels
+                   in
+                   let param_precondition =
+                     match unique_labels with
+                     | [] -> Rule.PBool true
+                     | [ label ] -> Rule.PVariable label
+                     | labels ->
+                         Rule.POr (List.map (fun l -> Rule.PVariable l) labels)
+                   in
+                   let taints_items, existing_precondition =
+                     sink_info.taints_with_precondition
+                   in
+                   (* Note there might be existing preconditions and we do not lose them. *)
+                   let combined_precondition =
+                     match (existing_precondition, param_precondition) with
+                     | Rule.PBool true, p -> p
+                     | Rule.PLabel "__SOURCE__", p -> p
+                     | e, Rule.PBool true -> e
+                     | e, p -> Rule.PAnd [ e; p ]
+                   in
+                   let updated_sink_info =
+                     {
+                       sink_info with
+                       taints_with_precondition =
+                         (taints_items, combined_precondition);
+                     }
+                   in
+                   Effects.add (Effect.ToSink updated_sink_info) acc
+                 else Effects.add eff acc
           | Effect.ToReturn return_info ->
               (* Retain return effects that carry any meaningful taint information.
                *
@@ -310,9 +403,13 @@ let extract_signature (taint_inst : TRI.t) ?(in_env : Taint_lval_env.t option)
                         | Taint.Control -> true (* Real control taint *))
                in
                if has_relevant_taint then Effects.add eff acc
-               else acc (* Skip only effects with no relevant taint *)
+             else acc (* Skip only effects with no relevant taint *)
            | Effect.ToSinkInCall _ -> Effects.add eff acc)
          Effects.empty
+  in
+  let params =
+    add_bash_implicit_params_from_effects taint_inst.lang params
+      effects_with_preconditions
   in
   let signature = { Signature.params; effects = effects_with_preconditions } in
   { signature; mapping }

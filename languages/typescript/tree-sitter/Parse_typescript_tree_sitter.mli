@@ -20,5 +20,11 @@ val parse :
   Fpath.t ->
   (Ast_js.a_program, unit) Tree_sitter_run.Parsing_result.t
 
+val parse_string :
+  ?dialect:dialect ->
+  src_file:Fpath.t ->
+  string ->
+  (Ast_js.a_program, unit) Tree_sitter_run.Parsing_result.t
+
 val parse_pattern :
   string -> (Ast_js.any, unit) Tree_sitter_run.Parsing_result.t

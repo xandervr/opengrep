@@ -1,0 +1,13 @@
+rules:
+  - id: taint_interfile_elixir
+    message: Taint should flow through Elixir module calls in other files
+    languages:
+      - elixir
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

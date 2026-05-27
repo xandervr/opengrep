@@ -174,6 +174,11 @@ let mk_unit tok eorig : exp =
   let unit = G.Unit tok in
   mk_e (Literal unit) eorig
 
+let tok_of_expr_or_fake (expr : G.expr) : Tok.t =
+  match H.ii_of_any (G.E expr) with
+  | tok :: _ -> tok
+  | [] -> G.fake "expr"
+
 (* Create an auxiliary variable for an expression.
  *
  * If 'force' is 'false' and the expression itself is already a variable then
@@ -1094,7 +1099,8 @@ and expr_aux env ?(void = false) g_expr : stmts * exp =
       (* Other cases are macroexpanded to these. TODO: Confirm which. *)
       ((todo_kind,
         tok), any_exprs)
-    when env.lang =*= Lang.Clojure && CLJ_ME1.expands_as_block todo_kind ->
+    when (env.lang =*= Lang.Clojure || env.lang =*= Lang.Lisp)
+         && CLJ_ME1.expands_as_block todo_kind ->
     let results =
       List.map
         (fun any_expr ->
@@ -1678,6 +1684,8 @@ and stmt_expr env ?g_expr st : stmts * exp =
         let ss_unit, unit_e = expr_opt env tok None in
         (ss @ [ret_stmt] @ ss_unit, unit_e)
       else (ss, e)
+  | G.OtherStmt (G.OS_ExprStmt2, [ G.E eorig ]) ->
+      expr env eorig
   | G.OtherStmt
       ( OS_Delete,
         ( [ (G.Tk tok as atok); G.E eorig ]
@@ -2098,13 +2106,17 @@ and stmt_aux env st : stmts =
          expression (referenced by iorig), but this match sees the outer
          wrapper. Propagate by checking the last expression in the block. *)
       | { e = G.OtherExpr ((kind, _), exprs); _ }
-        when env.lang =*= Lang.Clojure
+        when (env.lang =*= Lang.Clojure || env.lang =*= Lang.Lisp)
              && CLJ_ME1.expands_as_block kind
              && (match List.rev exprs with
                  | G.E { G.is_implicit_return = true; _ } :: _ -> true
                  | _ -> false) ->
           implicit_return env eorig tok
       | _ -> expr_stmt env eorig tok)
+  | G.OtherStmt (G.OS_ExprStmt2, [ G.E eorig ]) ->
+      let tok = tok_of_expr_or_fake eorig in
+      if eorig.is_implicit_return then implicit_return env eorig tok
+      else expr_stmt env eorig tok
   | G.DefStmt
       ( { name = EN obj; _ },
         G.VarDef

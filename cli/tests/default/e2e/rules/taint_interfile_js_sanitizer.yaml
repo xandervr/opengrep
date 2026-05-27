@@ -1,0 +1,14 @@
+rules:
+  - id: taint_interfile_js_sanitizer
+    message: Taint should respect imported JavaScript sanitizers
+    severity: WARNING
+    mode: taint
+    languages: [javascript]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sanitizers:
+      - pattern: sanitize(...)
+    pattern-sinks:
+      - pattern: sink(...)
