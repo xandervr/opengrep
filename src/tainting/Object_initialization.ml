@@ -455,6 +455,13 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         record_fields [] fields
     | _ -> ()
   in
+  let record_object_property_assignment_mapping lval_expr rval_expr =
+    match (object_property_path_from_expr lval_expr, class_name_from_expr rval_expr) with
+    | Some (obj_name, field_path), Some class_name ->
+        object_property_mappings :=
+          (obj_name, field_path, class_name) :: !object_property_mappings
+    | _ -> ()
+  in
   let record_destructured_object_property_mappings init_expr =
     let local_name_from_field_init field_name = function
       | Some { G.e = G.N local_name; _ } -> Some local_name
@@ -634,6 +641,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | G.ExprStmt (expr, _) -> (
             match expr.G.e with
             | G.Assign (lval_expr, _, rval_expr) -> (
+                record_object_property_assignment_mapping lval_expr rval_expr;
                 (match lval_expr.G.e with
                 | G.N alias_name ->
                     record_object_property_mappings alias_name rval_expr;
