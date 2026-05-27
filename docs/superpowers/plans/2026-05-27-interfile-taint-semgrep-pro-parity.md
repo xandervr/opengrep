@@ -42,6 +42,7 @@
 - Callback-return flows are now covered across Ruby, Scala, Rust, Swift, PHP, Elixir, and Clojure syntax forms.
 - JavaScript and TypeScript class-field helper instances now resolve through both the call graph and taint signature lookup, so `this.source.getInput()` can consume a cross-file `Source#getInput` signature.
 - JavaScript and TypeScript constructor-assigned helper instances now resolve when constructors assign `this.source = new Source()` and later methods call `this.source.getInput()`.
+- TypeScript constructor parameter properties now resolve when a typed parameter property such as `constructor(private source: Source)` is later used through `this.source.getInput()`.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -59,6 +60,7 @@
 - `93d972c3e694399a0093379468455639181c6bd6` - `test: cover callback language matrix` (unsigned for the same local signing issue)
 - `166fe1048fe20eb9c03f3efe45281375d5a7e33d` - `fix: resolve class field instance calls` (unsigned for the same local signing issue)
 - `5bab44a727a835e290188e4ea302141d11f86ea9` - `fix: resolve constructor assigned instance calls` (unsigned for the same local signing issue)
+- `36b5e3ad9bb957cacfba63c1eab9adc63dec7e44` - `fix: resolve typescript parameter properties` (unsigned for the same local signing issue)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -364,6 +366,7 @@ Verified in this handoff:
 - Focused direct scans passed for callback-return syntax across Ruby, Scala, Rust, Swift, PHP, Elixir, and Clojure.
 - Focused direct scans passed for JavaScript and TypeScript class-field helper instances where `this.source.getInput()` calls a helper object initialized in a class field.
 - Focused direct scans passed for JavaScript and TypeScript constructor-assigned helper instances where `this.source = new Source()` is assigned in the constructor.
+- Focused direct scans passed for TypeScript constructor parameter properties with typed helper fields.
 - Direct probes passed for Java/Python/JavaScript override dispatch and multi-level inheritance.
 - Broad direct scans passed for `taint_interfile_language_matrix` with 28 findings and `taint_interfile_parser_smoke` with 13 findings.
 - `--dataflow-traces` on `taint_interfile_js` produced cross-file source, intermediate variable, and sink trace locations.
@@ -373,6 +376,7 @@ Verified in this handoff:
 
 Known boundaries:
 - `generic` and `regex` are extended non-AST analyzers, not parser-backed target languages. Taint mode now rejects them with a structured `SemgrepError` and CLI help documents that they do not support taint mode.
+- Untyped JavaScript constructor-parameter injection, such as `constructor(source) { this.source = source }` with `new App(new Source())`, remains a dynamic object-shape inference gap. Java, C#, and explicit typed TypeScript constructor assignment probes are already green; TypeScript parameter-property syntax is covered by the latest checkpoint.
 - Do not claim full Semgrep Pro parity until a requirement-by-requirement audit proves it.
 
 Docker-only instruction:
@@ -601,6 +605,40 @@ Current verification after the fix:
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
 Next resume point: continue auditing deeper dependency-injection forms such as constructor parameters assigned to fields, language-specific class-field edge cases, or callback-body-sink variants for the broader callback language matrix.
+
+---
+
+## Latest Session Update: TypeScript Parameter Properties Green
+
+TypeScript constructor parameter properties now work when a typed parameter property is later used through `this.<field>.<method>()`.
+
+- `src/tainting/Object_initialization.ml` now records parameter-property fields with class types from constructor parameters that carry visibility or readonly-style attributes.
+- This covers syntax such as `constructor(private source: Source) {}` without requiring a separate field declaration or explicit constructor assignment.
+- `cli/tests/default/e2e/rules/taint_interfile_typescript_parameter_property.yaml` and `targets/taint_interfile_typescript_parameter_property/` lock the TypeScript parameter-property regression.
+
+Red proof before the fix:
+
+```text
+taint_interfile_typescript_parameter_property count=0 expected=1 errors=0 interfile_lang_count=1
+```
+
+Green proof after the fix:
+
+```text
+taint_interfile_typescript_parameter_property count=1 expected=1 errors=0 interfile_lang_count=1
+rules.taint_interfile_typescript_parameter_property    targets/taint_interfile_typescript_parameter_property/app.ts    7
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes.
+- Full direct regression matrix passes, including `taint_interfile_typescript_parameter_property count=1`, `taint_interfile_constructor_field_instance count=2`, `taint_interfile_class_field_instance count=2`, `taint_interfile_static_field count=5`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+
+Boundary note: untyped JavaScript constructor-parameter injection remains open because it requires dynamic object-shape inference from call-site constructor arguments. Direct probes showed Java and C# constructor-parameter assignment are green, and explicit typed TypeScript constructor assignment is green.
+
+Next resume point: audit callback-body-sink variants for the broader callback language matrix, more language-specific class-field edge cases, or decide whether to model untyped JavaScript constructor-argument object shapes.
 
 ---
 
