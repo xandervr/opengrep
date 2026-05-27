@@ -23,7 +23,7 @@
 - Preserve support for every parser-backed target language in `cli/src/semgrep/semgrep_interfaces/lang.json`.
 - Do not claim full Semgrep Pro parity until the remaining audit covers the full objective. `generic` and `regex` are now explicitly classified as non-AST analyzers outside Semgrep Pro taint parity scope.
 
-**Completed in the current dirty worktree:**
+**Completed and pushed on `codex/interfile-taint-mvp`:**
 - CommonJS default exports, named function exports, and named object exports have Docker-verified interfile taint findings.
 - Vue target parsing has been restored for `<script>` sections and is covered by Docker-verified language-matrix, parser-smoke, and trace checks.
 - Static fixture coverage now checks all 45 `lang.json` target-language IDs, normalizing accepted aliases such as `javascript` to `js` and `typescript` to `ts`.
@@ -31,10 +31,13 @@
 - `generic` and `regex` taint are now explicitly rejected with a structured `SemgrepError`, and CLI help no longer promises a fallback that cannot run.
 - JavaScript interfile sanitizer and propagator fixtures now cover imported sanitizer functions and imported side-effect propagator functions.
 - Python imported side-effect sanitizers now propagate across signatures through a `CleanLval` effect. Docker red/green proof showed `sink(data)` at line 8 disappear while `sink(unsafe)` at line 10 remains.
+- Python inherited methods now resolve through the interfile call graph. `Graph_from_AST` builds a class hierarchy from `ClassDef.cextends` and searches subclass methods before parent methods for ordinary calls, top-level calls, chained constructor calls, static/class calls, and callback lookup.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
 - `47d785905a858ea1f0ef5e22b2ae6980cdca9db4` - `fix: propagate interfile side-effect sanitizers`
+- `b6838a1d4ad2995a765d6cfef7174e52531271b8` - `docs: update interfile taint handoff`
+- `8c72876d684d9bc334d8a8e2a12bcdbd91189972` - `fix: resolve inherited interfile methods`
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -72,7 +75,20 @@ Latest side-effect sanitizer verification:
 taint_interfile_python_side_effect_sanitizer count=1 expected=1 errors=0 interfile_lang_count=1
 ```
 
-Latest broad Docker direct scan matrix after `47d785905`:
+Latest Python inheritance red proof before `8c72876d`:
+
+```text
+taint_interfile_python_inheritance count=0 expected=1 errors=0 interfile_lang_count=1
+```
+
+Latest Python inheritance green proof after `8c72876d`:
+
+```text
+taint_interfile_python_inheritance count=1 expected=1 errors=0 interfile_lang_count=1
+rules.taint_interfile_python_inheritance    targets/taint_interfile_python_inheritance/app.py    6
+```
+
+Latest broad Docker direct scan matrix after `8c72876d`:
 
 ```text
 taint_interfile_js count=1 expected=1 errors=0 interfile_lang_count=1
@@ -87,6 +103,7 @@ taint_interfile_python count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_python_module_import count=2 expected=2 errors=0 interfile_lang_count=1
 taint_interfile_python_duplicate_names count=2 expected=2 errors=0 interfile_lang_count=1
 taint_interfile_python_class_instance count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_python_inheritance count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_python_imported_value count=3 expected=3 errors=0 interfile_lang_count=1
 taint_interfile_python_wildcard_import count=2 expected=2 errors=0 interfile_lang_count=1
 taint_interfile_python_sanitizer count=1 expected=1 errors=0 interfile_lang_count=1
@@ -143,9 +160,9 @@ jq -r ".errors[]?.message // .errors[]? // empty" /tmp/opengrep-generic-regex/re
 
 ## Current State Snapshot
 
-Worktree is intentionally dirty. Do not reset or discard it.
+Worktree is expected to be clean after the latest pushed checkpoints. Verify with `git status -sb` before resuming.
 
-Major modified engine files:
+Major engine files touched by the interfile taint branch:
 - `src/tainting/Dataflow_tainting.ml`
 - `src/tainting/Dataflow_tainting.mli`
 - `src/tainting/Graph_from_AST.ml`
@@ -178,6 +195,7 @@ Verified in this handoff:
 - Docker `make core` completed successfully.
 - Focused direct scans passed for JS imports, JS CommonJS default export, JS object method, package collision, Python imports, Java, Go, and Elixir.
 - Focused direct scans passed for JavaScript interfile sanitizer and propagator behavior.
+- Focused direct scans passed for Python imported side-effect sanitizers and inherited Python methods.
 - Broad direct scans passed for `taint_interfile_language_matrix` with 28 findings and `taint_interfile_parser_smoke` with 13 findings.
 - `--dataflow-traces` on `taint_interfile_js` produced cross-file source, intermediate variable, and sink trace locations.
 - `--dataflow-traces` on the Vue language-matrix fixture produced cross-file source, intermediate variable, and sink trace locations.
