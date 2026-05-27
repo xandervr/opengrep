@@ -493,9 +493,41 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
       | Some _ -> None
       | None -> Some field_name
     in
+    let top_level_field_in excluded_fields = function
+      | field_name :: _ ->
+          List.exists (same_resolved_name field_name) excluded_fields
+      | [] -> false
+    in
+    let copy_rest_properties obj_name rest_name excluded_fields =
+      !object_property_mappings
+      |> List.iter (fun (mapped_obj, mapped_path, class_name) ->
+             if
+               same_resolved_name obj_name mapped_obj
+               && not (top_level_field_in excluded_fields mapped_path)
+             then
+               object_property_mappings :=
+                 (rest_name, mapped_path, class_name)
+                 :: !object_property_mappings)
+    in
     match init_expr.G.e with
     | G.Assign ({ e = G.Record (_, fields, _); _ }, _, { e = G.N obj_name; _ })
       ->
+        let destructured_fields =
+          fields
+          |> List.filter_map (function
+               | G.F
+                   {
+                     G.s =
+                       G.DefStmt
+                         ( field_entity,
+                           G.FieldDefColon { G.vinit = _; _ } );
+                     _;
+                   } -> (
+                   match field_entity.G.name with
+                   | G.EN field_name -> Some field_name
+                   | _ -> None)
+               | _ -> None)
+        in
         fields
         |> List.iter (function
              | G.F
@@ -518,6 +550,23 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                            (local_name, class_name) :: !object_mappings
                      | _ -> ())
                  | _ -> ())
+             | G.F
+                 {
+                   G.s =
+                     G.ExprStmt
+                       ( {
+                           G.e =
+                             G.Call
+                               ( { G.e = G.IdSpecial (G.Spread, _); _ },
+                                 ( _,
+                                   [ G.Arg { G.e = G.N rest_name; _ } ],
+                                   _ ) );
+                           _;
+                         },
+                         _ );
+                   _;
+                 } ->
+                 copy_rest_properties obj_name rest_name destructured_fields
              | _ -> ())
     | _ -> ()
   in
