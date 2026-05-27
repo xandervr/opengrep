@@ -33,6 +33,7 @@
 - Python imported side-effect sanitizers now propagate across signatures through a `CleanLval` effect. Docker red/green proof showed `sink(data)` at line 8 disappear while `sink(unsafe)` at line 10 remains.
 - Python inherited methods now resolve through the interfile call graph. `Graph_from_AST` builds a class hierarchy from `ClassDef.cextends` and searches subclass methods before parent methods for ordinary calls, top-level calls, chained constructor calls, static/class calls, and callback lookup.
 - Inherited constructors now resolve through class lineage. A three-language fixture covers base constructors that set tainted fields and inherited methods that return those fields on Java, JavaScript, and Python subclass instances.
+- Java unqualified instance-field access now canonicalizes `EnclosedVar` lvalues as implicit `this.<field>` for interfile signatures and local dataflow. This keeps `return value` aligned with constructor assignments to `this.value`.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -41,6 +42,7 @@
 - `8c72876d684d9bc334d8a8e2a12bcdbd91189972` - `fix: resolve inherited interfile methods`
 - `49ef0429b86541142b38a2c51f2a8c1eec90530b` - `docs: record inherited interfile taint checkpoint`
 - `8efc77cbb7e34557466600e143729725f801f9c5` - `fix: resolve inherited constructors in interfile taint`
+- `5520f09144759c58ceeae51a596a58cb2ec0b62f` - `fix: track unqualified java instance fields`
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -71,7 +73,7 @@ The Docker-built help text now says:
 1. Re-run the Docker direct scan matrix from Task 4 after any further engine change.
 2. Keep `git diff --check` and `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` green.
 3. Continue auditing remaining Semgrep Pro parity gaps beyond the covered import/value/export/object/trace/inheritance cases.
-4. A separate probe showed Java inherited constructors work when fields are accessed as `this.value`, but the same shape with unqualified `value` still produced 0 findings. Treat unqualified Java instance-field access as a separate audit item, not part of the inherited-constructor regression.
+4. Audit adjacent unqualified instance-field shapes outside Java, especially C# and Kotlin, before making any broad class-field parity claim.
 
 Latest side-effect sanitizer verification:
 
@@ -107,7 +109,20 @@ rules.taint_interfile_inherited_constructor_js    targets/taint_interfile_inheri
 rules.taint_interfile_inherited_constructor_python    targets/taint_interfile_inherited_constructor/python/app.py    6
 ```
 
-Latest broad Docker direct scan matrix after `8efc77cbb`:
+Latest Java unqualified instance-field red proof before `5520f0914`:
+
+```text
+taint_interfile_java_unqualified_field count=0 expected=1 errors=0 interfile_lang_count=1
+```
+
+Latest Java unqualified instance-field green proof after `5520f0914`:
+
+```text
+taint_interfile_java_unqualified_field count=1 expected=1 errors=0 interfile_lang_count=1
+rules.taint_interfile_java_unqualified_field    targets/taint_interfile_java_unqualified_field/App.java    4
+```
+
+Latest broad Docker direct scan matrix after `5520f0914`:
 
 ```text
 taint_interfile_js count=1 expected=1 errors=0 interfile_lang_count=1
@@ -118,6 +133,7 @@ taint_interfile_js_sanitizer count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_js_propagator count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_imported_value_package_collision count=2 expected=2 errors=0 interfile_lang_count=2
 taint_interfile_java count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_java_unqualified_field count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_python count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_python_module_import count=2 expected=2 errors=0 interfile_lang_count=1
 taint_interfile_python_duplicate_names count=2 expected=2 errors=0 interfile_lang_count=1
@@ -217,6 +233,7 @@ Verified in this handoff:
 - Focused direct scans passed for JavaScript interfile sanitizer and propagator behavior.
 - Focused direct scans passed for Python imported side-effect sanitizers and inherited Python methods.
 - Focused direct scans passed for inherited constructors in Java, JavaScript, and Python.
+- Focused direct scans passed for Java unqualified instance-field access through inherited constructor state.
 - Broad direct scans passed for `taint_interfile_language_matrix` with 28 findings and `taint_interfile_parser_smoke` with 13 findings.
 - `--dataflow-traces` on `taint_interfile_js` produced cross-file source, intermediate variable, and sink trace locations.
 - `--dataflow-traces` on the Vue language-matrix fixture produced cross-file source, intermediate variable, and sink trace locations.
@@ -229,6 +246,34 @@ Known boundaries:
 
 Docker-only instruction:
 - The user explicitly said to compile in Docker. Do not use local opam/dune builds as the authoritative build gate.
+
+---
+
+## Latest Session Update: Java Unqualified Fields Green
+
+Java field-backed interfile flows now work when an inherited method returns an unqualified field name instead of `this.<field>`.
+
+- `src/tainting/Dataflow_tainting.ml` canonicalizes Java `EnclosedVar` field lvalues to implicit `this.<field>` during local taint propagation.
+- `src/tainting/Taint_signature_extractor.ml` seeds method properties for unqualified Java fields by synthesizing the same implicit receiver shape in signatures.
+- `src/engine/Match_tainting_mode.ml` passes the target language into signature extraction.
+- `cli/tests/default/e2e/targets/taint_interfile_java_unqualified_field/` and `rules/taint_interfile_java_unqualified_field.yaml` lock the regression.
+
+Current targeted scan:
+
+```text
+taint_interfile_java_unqualified_field count=1 expected=1 errors=0 interfile_lang_count=1
+rules.taint_interfile_java_unqualified_field    targets/taint_interfile_java_unqualified_field/App.java    4
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes.
+- Direct Java unqualified field scan returns the expected finding.
+- Focused direct regression matrix passes, including `taint_interfile_java_unqualified_field count=1 expected=1 errors=0 interfile_lang_count=1`, `taint_interfile_language_matrix count=28 expected=28 errors=0 interfile_lang_count=28`, and `taint_interfile_parser_smoke count=13 expected=13 errors=0 interfile_lang_count=13`.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+
+Next resume point: audit adjacent class-field and dispatch parity gaps, especially C#/Kotlin unqualified instance fields, static fields, overrides, and higher-order callback flows.
 
 ---
 
