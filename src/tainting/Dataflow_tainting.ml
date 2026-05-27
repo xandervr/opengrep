@@ -46,6 +46,9 @@ let reset_constructor () =
 (* Language-dependent constructor identification *)
 let is_constructor = Object_initialization.is_constructor
 
+let is_class_initializer func_name =
+  String.starts_with ~prefix:"Class:" func_name
+
 (* TODO: Rename things to make clear that there are "sub-matches" and there are
  * "best matches". *)
 
@@ -434,11 +437,13 @@ let type_of_lval env lval =
       Typing.resolved_type_of_id_info env.taint_inst.lang fld.id_info
   | __else__ -> Type.NoType
 
-let unqualified_java_instance_field_lval env (lval : IL.lval) :
-    IL.lval option =
+let enclosed_vars_are_implicit_instance_fields lang =
+  lang =*= Lang.Java || lang =*= Lang.Csharp || lang =*= Lang.Kotlin
+
+let unqualified_instance_field_lval env (lval : IL.lval) : IL.lval option =
   match lval.base with
   | Var name
-    when env.taint_inst.lang =*= Lang.Java -> (
+    when enclosed_vars_are_implicit_instance_fields env.taint_inst.lang -> (
       match !(name.id_info.id_resolved) with
       | Some (G.EnclosedVar, _) ->
           let field_offset = { o = Dot name; oorig = NoOrig } in
@@ -451,7 +456,7 @@ let unqualified_java_instance_field_lval env (lval : IL.lval) :
   | _ -> None
 
 let canonical_lval env (lval : IL.lval) : IL.lval =
-  match unqualified_java_instance_field_lval env lval with
+  match unqualified_instance_field_lval env lval with
   | Some field_lval -> field_lval
   | None -> lval
 
@@ -1396,7 +1401,7 @@ and check_tainted_lval_aux env (lval : IL.lval) :
                 match Lval_env.find_lval lval_env lval with
                 | Some _ as result -> result
                 | None -> (
-                    match unqualified_java_instance_field_lval env lval with
+                    match unqualified_instance_field_lval env lval with
                     | Some field_lval -> Lval_env.find_lval lval_env field_lval
                     | None -> None)
               with
@@ -2360,8 +2365,10 @@ let call_with_intrafile lval_opt e env args instr =
                   (Option.map Function_id.of_il_name env.func.name)
                   call_tok with
           | Some callee_node ->
+              let callee_name = Function_id.show callee_node in
               Object_initialization.is_constructor env.taint_inst.lang
-                (Function_id.show callee_node) None
+                callee_name None
+              || is_class_initializer callee_name
           | None -> false
         in
         (* Remap: ClassName() → obj.ClassName(), ClassName.new() → obj.ClassName()
@@ -3244,7 +3251,7 @@ and (fixpoint :
       | Some func_name_node -> (
           let func_name = fst func_name_node.IL.ident in
           let is_ctor = is_constructor taint_inst.lang func_name class_name in
-          if is_ctor then in_env
+          if is_ctor || is_class_initializer func_name then in_env
           else
             (* This is not a constructor, check if we have stored instance variable taint *)
             match class_name with
@@ -3420,7 +3427,10 @@ and (fixpoint :
      match name with
      | Some func_name_node -> (
          let func_name = fst func_name_node.IL.ident in
-         if is_constructor taint_inst.lang func_name class_name then
+         if
+           is_constructor taint_inst.lang func_name class_name
+           || is_class_initializer func_name
+         then
            (* Store constructor taint only when we have proper class context *)
            match class_name with
            | Some cls ->

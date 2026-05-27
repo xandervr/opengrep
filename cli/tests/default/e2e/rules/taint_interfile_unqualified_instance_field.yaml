@@ -1,0 +1,22 @@
+rules:
+  - id: taint_interfile_unqualified_instance_field_csharp
+    message: Taint should flow through C# unqualified instance fields
+    languages: [csharp]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_unqualified_instance_field_kotlin
+    message: Taint should flow through Kotlin unqualified instance fields
+    languages: [kotlin]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

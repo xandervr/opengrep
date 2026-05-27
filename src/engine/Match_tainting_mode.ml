@@ -50,6 +50,67 @@ type fun_info = {
   is_lambda_assignment : bool;
 }
 
+let class_init_name (class_name : IL.name) : IL.name =
+  let class_str = fst class_name.IL.ident in
+  let fake_tok = Tok.unsafe_fake_tok ("Class:" ^ class_str) in
+  IL.
+    {
+      ident = ("Class:" ^ class_str, fake_tok);
+      sid = G.SId.unsafe_default;
+      id_info = G.empty_id_info ();
+    }
+
+let class_init_statement = function
+  | G.F { G.s = G.DefStmt (_, G.FuncDef _); _ } -> None
+  | G.F { G.s = G.DefStmt (_, G.VarDef { G.vinit = None; _ }); _ } -> None
+  | G.F stmt -> Some stmt
+
+let class_init_infos lang (ast : G.program) : fun_info list =
+  let infos = ref [] in
+  let visitor =
+    object
+      inherit [_] G.iter_no_id_info as super
+
+      method! visit_definition () ((entity, def_kind) as def) =
+        (match (entity.G.name, def_kind) with
+        | G.EN class_g_name, G.ClassDef cdef ->
+            let init_stmts =
+              cdef.G.cbody |> Tok.unbracket
+              |> List.filter_map class_init_statement
+            in
+            if not (List_.null init_stmts) then (
+              let class_name = AST_to_IL.var_of_name class_g_name in
+              let name = class_init_name class_name in
+              let fake_tok = snd name.IL.ident in
+              let fdef : G.function_definition =
+                {
+                  fkind = (G.Method, fake_tok);
+                  fparams = Tok.unsafe_fake_bracket [];
+                  frettype = None;
+                  fbody =
+                    G.FBStmt
+                      (G.Block (Tok.unsafe_fake_bracket init_stmts) |> G.s);
+                }
+              in
+              let fdef_il = AST_to_IL.function_definition lang fdef in
+              let cfg = CFG_build.cfg_of_fdef fdef_il in
+              infos :=
+                {
+                  name;
+                  class_name_str = Some (fst class_name.IL.ident);
+                  method_properties = [];
+                  cfg;
+                  fdef;
+                  is_lambda_assignment = false;
+                }
+                :: !infos)
+        | _ -> ());
+        super#visit_definition () def
+    end
+  in
+  visitor#visit_program () ast;
+  !infos
+
 (*****************************************************************************)
 (* Prelude *)
 (*****************************************************************************)
@@ -483,88 +544,93 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
           in
 
           let collected_infos, info_map =
-            Visit_function_defs.fold_with_parent_path
-              (fun (infos, info_map) opt_ent parent_path fdef ->
-                match fst fdef.fkind with
-                | LambdaKind
-                | Arrow -> (
-                    match opt_ent with
-                    | None -> (infos, info_map)
-                    | Some ent ->
-                        match AST_to_IL.name_of_entity ent with
-                        | None -> (infos, info_map)
-                        | Some name ->
-                            let class_name_str =
-                              match parent_path with
-                              | Some class_il :: _ -> Some (fst class_il.IL.ident)
-                              | _ -> None
-                            in
-                            let fdef_il =
-                              AST_to_IL.function_definition taint_inst.lang
-                                fdef
-                            in
-                            let cfg = CFG_build.cfg_of_fdef fdef_il in
-                            let info =
-                              {
-                                name;
-                                class_name_str;
-                                method_properties = [];
-                                cfg;
-                                fdef;
-                                is_lambda_assignment = true;
-                              }
-                            in
-                            add_info info (infos, info_map))
-                | Function
-                | Method
-                | BlockCases -> (
-                    match Option.bind opt_ent AST_to_IL.name_of_entity with
-                    | None -> (infos, info_map)
-                    | Some name ->
-                        (* For Go methods, extract receiver type as class name *)
-                        let go_receiver_name =
-                          match lang with
-                          | Lang.Go ->
-                              Graph_from_AST.extract_go_receiver_type fdef
-                          | _ -> None
-                        in
-                        let class_name_str =
-                          match go_receiver_name with
-                          | Some recv_name -> Some recv_name
-                          | None -> (
-                              match parent_path with
-                              | Some class_il :: _ -> Some (fst class_il.IL.ident)
-                              | _ -> None)
-                        in
-                        let method_properties =
-                          match fst fdef.fkind with
-                          | Method ->
-                              Taint_signature_extractor.extract_method_properties
-                                ~lang
-                                fdef
-                          | Function
-                          | LambdaKind
-                          | Arrow
-                          | BlockCases ->
-                              []
-                        in
-                        let fdef_il =
-                          AST_to_IL.function_definition taint_inst.lang                            fdef
-                        in
-                        let cfg = CFG_build.cfg_of_fdef fdef_il in
-                        let info =
-                          {
-                            name;
-                            class_name_str;
-                            method_properties;
-                            cfg;
-                            fdef;
-                            is_lambda_assignment = false;
-                          }
-                        in
-                        add_info info (infos, info_map)))
-              ([], Shape_and_sig.FunctionMap.empty)
-              ast
+            let function_infos =
+              Visit_function_defs.fold_with_parent_path
+                (fun (infos, info_map) opt_ent parent_path fdef ->
+                  match fst fdef.fkind with
+                  | LambdaKind
+                  | Arrow -> (
+                      match opt_ent with
+                      | None -> (infos, info_map)
+                      | Some ent -> (
+                          match AST_to_IL.name_of_entity ent with
+                          | None -> (infos, info_map)
+                          | Some name ->
+                              let class_name_str =
+                                match parent_path with
+                                | Some class_il :: _ ->
+                                    Some (fst class_il.IL.ident)
+                                | _ -> None
+                              in
+                              let fdef_il =
+                                AST_to_IL.function_definition taint_inst.lang
+                                  fdef
+                              in
+                              let cfg = CFG_build.cfg_of_fdef fdef_il in
+                              let info =
+                                {
+                                  name;
+                                  class_name_str;
+                                  method_properties = [];
+                                  cfg;
+                                  fdef;
+                                  is_lambda_assignment = true;
+                                }
+                              in
+                              add_info info (infos, info_map)))
+                  | Function
+                  | Method
+                  | BlockCases -> (
+                      match Option.bind opt_ent AST_to_IL.name_of_entity with
+                      | None -> (infos, info_map)
+                      | Some name ->
+                          (* For Go methods, extract receiver type as class name *)
+                          let go_receiver_name =
+                            match lang with
+                            | Lang.Go ->
+                                Graph_from_AST.extract_go_receiver_type fdef
+                            | _ -> None
+                          in
+                          let class_name_str =
+                            match go_receiver_name with
+                            | Some recv_name -> Some recv_name
+                            | None -> (
+                                match parent_path with
+                                | Some class_il :: _ ->
+                                    Some (fst class_il.IL.ident)
+                                | _ -> None)
+                          in
+                          let method_properties =
+                            match fst fdef.fkind with
+                            | Method ->
+                                Taint_signature_extractor.extract_method_properties
+                                  ~lang fdef
+                            | Function
+                            | LambdaKind
+                            | Arrow
+                            | BlockCases ->
+                                []
+                          in
+                          let fdef_il =
+                            AST_to_IL.function_definition taint_inst.lang fdef
+                          in
+                          let cfg = CFG_build.cfg_of_fdef fdef_il in
+                          let info =
+                            {
+                              name;
+                              class_name_str;
+                              method_properties;
+                              cfg;
+                              fdef;
+                              is_lambda_assignment = false;
+                            }
+                          in
+                          add_info info (infos, info_map)))
+                ([], Shape_and_sig.FunctionMap.empty)
+                ast
+            in
+            class_init_infos lang ast
+            |> List.fold_left (fun acc info -> add_info info acc) function_infos
           in
           (* Use object mappings from Object_initialization.ml *)
           let all_object_mappings = object_mappings in

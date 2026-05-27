@@ -641,6 +641,37 @@ def test_interfile_taint_flows_through_unqualified_java_fields(
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_unqualified_instance_fields(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_unqualified_instance_field.yaml",
+        target_name="taint_interfile_unqualified_instance_field",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = output["results"]
+
+    assert set(output["interfile_languages_used"]) == {"C#", "Kotlin"}
+    assert {
+        (result["check_id"], result["path"], result["start"]["line"])
+        for result in results
+    } == {
+        (
+            "rules.taint_interfile_unqualified_instance_field_csharp",
+            "targets/taint_interfile_unqualified_instance_field/csharp/App.cs",
+            4,
+        ),
+        (
+            "rules.taint_interfile_unqualified_instance_field_kotlin",
+            "targets/taint_interfile_unqualified_instance_field/kotlin/app.kt",
+            3,
+        ),
+    }
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_imported_python_module_value(
     run_semgrep_in_tmp: RunSemgrep,
 ):

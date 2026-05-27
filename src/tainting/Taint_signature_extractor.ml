@@ -49,12 +49,16 @@ let extract_param_labels_from_sink (sink_info : Effect.taints_to_sink) :
          | _ -> acc)
        []
 
-let java_implicit_this_property (expr : G.expr) id id_info : G.expr =
+let enclosed_vars_are_implicit_instance_fields lang =
+  Lang.equal lang Lang.Java || Lang.equal lang Lang.Csharp
+  || Lang.equal lang Lang.Kotlin
+
+let implicit_this_property (expr : G.expr) id id_info : G.expr =
   let tok = snd id in
   let this_expr = { expr with G.e = G.IdSpecial (G.This, tok) } in
   { expr with G.e = G.DotAccess (this_expr, tok, G.FN (G.Id (id, id_info))) }
 
-(* Extract this.x/self.x properties and Java implicit this fields from a method. *)
+(* Extract this.x/self.x properties and implicit this fields from a method. *)
 let extract_method_properties ~(lang : Lang.t) (fdef : G.function_definition) :
     G.expr list =
   let found_properties = ref [] in
@@ -65,12 +69,11 @@ let extract_method_properties ~(lang : Lang.t) (fdef : G.function_definition) :
       method! visit_expr () expr =
         (match expr.G.e with
         | G.N (G.Id (id, id_info))
-          when Lang.equal lang Lang.Java -> (
+          when enclosed_vars_are_implicit_instance_fields lang -> (
             match !(id_info.G.id_resolved) with
             | Some (G.EnclosedVar, _) ->
                 found_properties :=
-                  java_implicit_this_property expr id id_info
-                  :: !found_properties
+                  implicit_this_property expr id id_info :: !found_properties
             | _ -> ())
         | G.DotAccess (obj, _, G.FN (G.Id (_, _))) -> (
             (* Check if base object is IdSpecial This or Self *)

@@ -61,8 +61,8 @@ val show_signature_extraction :
 
 val extract_method_properties :
   lang:Lang.t -> AST_generic.function_definition -> AST_generic.expr list
-(** Extract this.x/self.x property accesses and Java implicit this fields from a
-    method definition *)
+(** Extract this.x/self.x property accesses and implicit this fields from a
+    method definition. *)
 
 
 val detect_object_initialization : AST_generic.program -> Lang.t -> (AST_generic.name * AST_generic.name) list

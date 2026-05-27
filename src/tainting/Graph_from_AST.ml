@@ -461,6 +461,18 @@ let pick_imported_match (id_info : G.id_info) (call_arity : int option)
 (* Graph node type - reuse from Call_graph for consistency *)
 type node = Call_graph.node
 
+let class_init_fn_id class_name : fn_id =
+  let fake_tok = Tok.unsafe_fake_tok ("Class:" ^ class_name) in
+  let il_name =
+    IL.
+      {
+        ident = ("Class:" ^ class_name, fake_tok);
+        sid = G.SId.unsafe_default;
+        id_info = G.empty_id_info ();
+      }
+  in
+  [ None; Some il_name ]
+
 (* Extract graph node from fn_id - takes the last element *)
 let fn_id_to_node (fn_id : fn_id) : node option =
   match List.rev fn_id with
@@ -555,18 +567,29 @@ let resolve_constructor_from_type ~(lang : Lang.t) ?(class_hierarchy = [])
   match class_name with
   | None -> None
   | Some cls ->
-      class_lineage class_hierarchy cls
-      |> List.find_map (fun candidate_class ->
-             List.find_opt
-               (fun f ->
-                 match f.fn_id with
-                 | [ Some c; Some m ] ->
-                     fst c.IL.ident = candidate_class
-                     && Object_initialization.is_constructor lang
-                          (fst m.IL.ident) (Some candidate_class)
-                 | _ -> false)
-               all_funcs
-             |> Option.map (fun f -> f.fn_id))
+      let lineage = class_lineage class_hierarchy cls in
+      let explicit_constructor =
+        lineage
+        |> List.find_map (fun candidate_class ->
+               List.find_opt
+                 (fun f ->
+                   match f.fn_id with
+                   | [ Some c; Some m ] ->
+                       fst c.IL.ident = candidate_class
+                       && Object_initialization.is_constructor lang
+                            (fst m.IL.ident) (Some candidate_class)
+                   | _ -> false)
+                 all_funcs
+               |> Option.map (fun f -> f.fn_id))
+      in
+      match explicit_constructor with
+      | Some _ as constructor -> constructor
+      | None ->
+          lineage
+          |> List.find_map (fun candidate_class ->
+                 if List.mem_assoc candidate_class class_hierarchy then
+                   Some (class_init_fn_id candidate_class)
+                 else None)
 
 let identify_callee ~(lang : Lang.t) ?(object_mappings = [])
     ?(module_imports = []) ?(class_hierarchy = []) ?(all_funcs = [])
@@ -1381,9 +1404,9 @@ let build_call_graph ~(lang : Lang.t) ?(object_mappings = []) (ast : G.program)
     let class_str = fst class_il_name.IL.ident in
     (* Create Class:* node *)
     let class_init_node : node =
-      let fake_tok = Tok.unsafe_fake_tok ("Class:" ^ class_str) in
-      let il_name = IL.{ ident = ("Class:" ^ class_str, fake_tok); sid = G.SId.unsafe_default; id_info = G.empty_id_info () } in
-      Function_id.of_il_name il_name
+      match fn_id_to_node (class_init_fn_id class_str) with
+      | Some node -> node
+      | None -> failwith "class initializer fn_id should have a node"
     in
     Call_graph.G.add_vertex graph class_init_node;
 
@@ -1483,11 +1506,7 @@ let find_functions_containing_ranges ~(lang : Lang.t) (ast : G.program)
                   | Some class_g_name ->
                       let class_il_name = AST_to_IL.var_of_name class_g_name in
                       let class_str = fst class_il_name.IL.ident in
-                      let class_node_name =
-                        let fake_tok = Tok.unsafe_fake_tok ("Class:" ^ class_str) in
-                        Some IL.{ ident = ("Class:" ^ class_str, fake_tok); sid = G.SId.unsafe_default; id_info = AST_generic.empty_id_info () }
-                      in
-                      let class_fn_id = [None; class_node_name] in
+                      let class_fn_id = class_init_fn_id class_str in
                       let key = (range, match_file) in
                       let existing = Hashtbl.find range_to_funcs key in
                       if not (List.exists (fun (fid, _) -> equal_fn_id fid class_fn_id) existing) then
