@@ -823,6 +823,34 @@ def test_interfile_taint_flows_through_javascript_template_keyed_service_contain
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_javascript_dynamic_keyed_service_containers(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_js_constructor_parameter_dynamic_keyed_service_container.yaml",
+        target_name="taint_interfile_js_constructor_parameter_dynamic_keyed_service_container",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = sorted(output["results"], key=lambda result: result["path"])
+
+    assert output["interfile_languages_used"] == ["JavaScript"]
+    assert len(results) == 3
+    assert all(
+        result["check_id"]
+        == "rules.taint_interfile_js_constructor_parameter_dynamic_keyed_service_container"
+        for result in results
+    )
+    assert [result["path"] for result in results] == [
+        "targets/taint_interfile_js_constructor_parameter_dynamic_keyed_service_container/assignment/app.js",
+        "targets/taint_interfile_js_constructor_parameter_dynamic_keyed_service_container/map/app.js",
+        "targets/taint_interfile_js_constructor_parameter_dynamic_keyed_service_container/provider/app.js",
+    ]
+    assert [result["start"]["line"] for result in results] == [9, 9, 9]
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_javascript_chained_map_service_containers(
     run_semgrep_in_tmp: RunSemgrep,
 ):

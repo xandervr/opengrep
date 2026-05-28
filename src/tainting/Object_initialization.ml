@@ -269,6 +269,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let name_from_static_string_value value =
     G.Id ((value, Tok.unsafe_fake_tok value), G.empty_id_info ())
   in
+  let name_from_dynamic_property_key_name = function
+    | G.Id ((name, _), id_info) ->
+        let dynamic_name = "__opengrep_dynamic_key:" ^ name in
+        Some (G.Id ((dynamic_name, Tok.unsafe_fake_tok dynamic_name), id_info))
+    | _ -> None
+  in
   let rec name_from_static_string_expr expr =
     match expr.G.e with
     | G.L (G.String (_, (field_name, tok), _)) ->
@@ -299,13 +305,20 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | Some parts -> Some (name_from_static_string_value (String.concat "" parts))
     | None -> None
   in
-  let name_from_static_property_expr expr =
-    name_from_static_string_expr expr
+  let name_from_dynamic_property_key_expr expr =
+    match expr.G.e with
+    | G.N key_name -> name_from_dynamic_property_key_name key_name
+    | _ -> None
+  in
+  let name_from_property_key_expr expr =
+    match name_from_static_string_expr expr with
+    | Some _ as static_key -> static_key
+    | None -> name_from_dynamic_property_key_expr expr
   in
   let field_name_from_entity entity =
     match entity.G.name with
     | G.EN field_name -> Some field_name
-    | G.EDynamic field_expr -> name_from_static_property_expr field_expr
+    | G.EDynamic field_expr -> name_from_property_key_expr field_expr
     | _ -> None
   in
   let method_name_string = function
@@ -337,7 +350,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
          | G.NamedAttr (_, attr_name, attr_args)
            when is_inject_attribute_name attr_name -> (
              match Tok.unbracket attr_args with
-             | [ G.Arg key_expr ] -> name_from_static_property_expr key_expr
+             | [ G.Arg key_expr ] -> name_from_property_key_expr key_expr
              | _ -> None)
          | _ -> None)
   in
@@ -353,7 +366,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | G.DotAccess (obj_expr, _, G.FN field_name) ->
         object_property_path_from_base obj_expr field_name
     | G.ArrayAccess (obj_expr, (_, field_expr, _)) -> (
-        match name_from_static_property_expr field_expr with
+        match name_from_property_key_expr field_expr with
         | Some field_name -> object_property_path_from_base obj_expr field_name
         | None -> None)
     | G.Call
@@ -361,7 +374,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           (_, [ G.Arg key_expr ], _) ) -> (
         match
           ( is_object_property_get_method_name method_name,
-            name_from_static_property_expr key_expr )
+            name_from_property_key_expr key_expr )
         with
         | true, Some field_name -> object_property_path_from_base obj_expr field_name
         | _ -> None)
@@ -374,7 +387,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           (_, [ G.Arg key_expr; G.Arg value_expr ], _) ) -> (
         match
           ( is_object_property_set_method_name method_name,
-            name_from_static_property_expr key_expr )
+            name_from_property_key_expr key_expr )
         with
         | true, Some field_name -> (
             match object_property_path_from_base obj_expr field_name with
@@ -400,7 +413,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                 (_, [ G.Arg key_expr ], _) ) ) -> (
             match
               ( is_object_property_set_method_name bind_method_name,
-                name_from_static_property_expr key_expr )
+                name_from_property_key_expr key_expr )
             with
             | true, Some field_name -> (
                 match object_property_path_from_base obj_expr field_name with
@@ -421,7 +434,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         in
         match
           ( is_object_property_set_method_name method_name,
-            name_from_static_property_expr key_expr )
+            name_from_property_key_expr key_expr )
         with
         | true, Some field_name -> previous_entries @ [ (field_name, value_expr) ]
         | _ -> previous_entries)
@@ -434,7 +447,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           (_, [ G.Arg key_expr ], _) ) -> (
         match
           ( is_object_property_get_method_name method_name,
-            name_from_static_property_expr key_expr )
+            name_from_property_key_expr key_expr )
         with
         | true, Some field_name ->
             object_property_set_chain_entries_from_expr obj_expr
