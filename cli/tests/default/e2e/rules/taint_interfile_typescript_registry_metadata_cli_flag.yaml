@@ -1,0 +1,10 @@
+rules:
+  - id: taint_interfile_typescript_registry_metadata_cli_flag
+    message: CLI flag should force TypeScript registry metadata through interfile taint
+    languages: [typescript]
+    severity: WARNING
+    mode: taint
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

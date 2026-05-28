@@ -175,7 +175,8 @@ let cut s idx1 idx2 =
     String.sub s idx1 (idx2 - idx1),
     Str.string_after s idx2 )
 
-let pp_dataflow_trace ppf (trace : OutJ.match_dataflow_trace) =
+let pp_dataflow_trace ppf ~(finding_path : Fpath.t)
+    (trace : OutJ.match_dataflow_trace) =
   (* Helper to print a location with bold highlighting *)
   (* NOTE: We need to consider that the location can span > 1 lines, which
    * seems to happen with matches related to macroexpanded clojure code. *)
@@ -205,6 +206,8 @@ let pp_dataflow_trace ppf (trace : OutJ.match_dataflow_trace) =
          *      ┆       (sink)))
          *)
       in
+      if not (Fpath.equal loc.path finding_path) then
+        Fmt.pf ppf "%s %a:@." prefix Fpath.pp loc.path;
       let a, b, c = cut lines_to_print start_col end_col in
       Fmt.pf ppf "%s%4d┆ %s%a%s@." prefix start_line_num a
         Fmt.(styled `Bold string) b c
@@ -348,7 +351,9 @@ let pp_finding ~max_chars_per_line ~max_lines_per_finding ~color_output
        --max-chars-per-line]@."
       findings_indent;
   (match m.extra.dataflow_trace with
-  | Some trace -> if show_dataflow_traces then pp_dataflow_trace ppf trace else ()
+  | Some trace ->
+      if show_dataflow_traces then pp_dataflow_trace ppf ~finding_path:m.path trace
+      else ()
   | None -> ());
   match trimmed with
   | Some num ->

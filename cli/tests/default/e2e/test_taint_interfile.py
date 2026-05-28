@@ -1607,6 +1607,84 @@ def test_interfile_taint_flows_through_typescript_registry_metadata(
 
 
 @pytest.mark.kinda_slow
+def test_taint_interfile_cli_flag_forces_typescript_registry_metadata(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_typescript_registry_metadata_cli_flag.yaml",
+        target_name="taint_interfile_typescript_registry_metadata",
+        output_format=OutputFormat.JSON,
+        options=["--taint-interfile"],
+    )
+
+    output = json.loads(stdout)
+    results = sorted(output["results"], key=lambda result: result["path"])
+
+    assert output["interfile_languages_used"] == ["TypeScript"]
+    assert len(results) == 3
+    assert all(
+        result["check_id"]
+        == "rules.taint_interfile_typescript_registry_metadata_cli_flag"
+        for result in results
+    )
+    assert [result["path"] for result in results] == [
+        "targets/taint_interfile_typescript_registry_metadata/class_provider/app.ts",
+        "targets/taint_interfile_typescript_registry_metadata/factory_provider/app.ts",
+        "targets/taint_interfile_typescript_registry_metadata/value_provider/app.ts",
+    ]
+    assert [result["start"]["line"] for result in results] == [18, 18, 18]
+
+
+@pytest.mark.kinda_slow
+def test_interfile_taint_text_trace_shows_cross_file_source_path(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_typescript_registry_metadata.yaml",
+        target_name="taint_interfile_typescript_registry_metadata/class_provider",
+        output_format=OutputFormat.TEXT,
+        options=["--dataflow-traces"],
+    )
+
+    assert "Taint comes from:" in stdout
+    assert (
+        "targets/taint_interfile_typescript_registry_metadata/class_provider/source.ts"
+        in stdout
+    )
+    assert "source(\"registry-class\")" in stdout
+    assert "then call to:" in stdout
+    assert "sink(source.getInput())" in stdout
+
+
+@pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_typescript_delay_provider_metadata(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_typescript_delay_provider_metadata.yaml",
+        target_name="taint_interfile_typescript_delay_provider_metadata",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = sorted(output["results"], key=lambda result: result["path"])
+
+    assert output["interfile_languages_used"] == ["TypeScript"]
+    assert len(results) == 3
+    assert all(
+        result["check_id"]
+        == "rules.taint_interfile_typescript_delay_provider_metadata"
+        for result in results
+    )
+    assert [result["path"] for result in results] == [
+        "targets/taint_interfile_typescript_delay_provider_metadata/both_delay/app.ts",
+        "targets/taint_interfile_typescript_delay_provider_metadata/inject_delay/app.ts",
+        "targets/taint_interfile_typescript_delay_provider_metadata/token_delay/app.ts",
+    ]
+    assert [result["start"]["line"] for result in results] == [24, 24, 24]
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_javascript_service_container_factories(
     run_semgrep_in_tmp: RunSemgrep,
 ):

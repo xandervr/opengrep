@@ -749,9 +749,12 @@ let sca_rules_filtering (target : Target.regular) (rules : Rule.t list) :
   let rules = rules_with_dep_matches |> List_.map fst in
   (rules, dependency_match_table)
 
-let is_interfile_taint_rule (rule : Rule.t) : bool =
-  match (rule.mode, rule.options) with
-  | `Taint _, Some opts -> opts.interfile
+let is_interfile_taint_rule ~force_interfile (rule : Rule.t) : bool =
+  match rule.mode with
+  | `Taint _ -> (
+      match rule.options with
+      | Some opts -> opts.interfile || force_interfile
+      | None -> force_interfile)
   | _ -> false
 
 let supports_interfile_taint (xlang : Xlang.t) : bool =
@@ -766,10 +769,12 @@ let interfile_rule_applies_to_analyzer (interfile_rules : Rule.t list)
          Xlang.is_compatible ~require:analyzer ~provide:rule.target_analyzer)
 
 let build_interfile_asts_by_analyzer (targets : Target.t list)
-    (valid_rules : Rule.t list) :
+    (valid_rules : Rule.t list) ~(force_interfile : bool) :
     (Lang.t, AST_generic.program * Tok.location list) Hashtbl.t =
   let asts_by_analyzer = Hashtbl.create 8 in
-  let interfile_rules = List.filter is_interfile_taint_rule valid_rules in
+  let interfile_rules =
+    List.filter (is_interfile_taint_rule ~force_interfile) valid_rules
+  in
   if not (List_.null interfile_rules) then
     targets
     |> List.iter (function
@@ -880,7 +885,12 @@ let mk_target_handler (caps : < Cap.time_limit >) (config : Core_scan_config.t)
       let match_hook _ = () in
       let xconf =
         {
-          Match_env.config = { Rule_options.default with taint_intrafile = config.taint_intrafile };
+          Match_env.config =
+            {
+              Rule_options.default with
+              taint_intrafile =
+                config.taint_intrafile || config.taint_interfile;
+            };
           equivs = parse_equivalences config.equivalences_file;
           nested_formula = false;
           matching_conf = config.matching_conf;
@@ -893,7 +903,9 @@ let mk_target_handler (caps : < Cap.time_limit >) (config : Core_scan_config.t)
       let interfile_rules, regular_rules =
         rules
         |> List.partition (fun rule ->
-               is_interfile_taint_rule rule && Option.is_some interfile_ast)
+               is_interfile_taint_rule ~force_interfile:config.taint_interfile
+                 rule
+               && Option.is_some interfile_ast)
       in
       let timeout =
         let caps = (caps :> < Cap.time_limit >) in
@@ -977,6 +989,7 @@ let scan_exn (caps : < caps ; .. >) (config : Core_scan_config.t)
   log_scan_inputs config ~targets ~skipped ~valid_rules ~invalid_rules;
   let interfile_asts_by_analyzer =
     build_interfile_asts_by_analyzer targets valid_rules
+      ~force_interfile:config.taint_interfile
   in
   let prefilter_cache_opt =
     if config.filter_irrelevant_rules then

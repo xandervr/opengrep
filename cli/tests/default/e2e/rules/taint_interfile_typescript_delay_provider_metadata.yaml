@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_typescript_delay_provider_metadata
+    message: Taint should flow through TypeScript delayed provider metadata
+    languages: [typescript]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

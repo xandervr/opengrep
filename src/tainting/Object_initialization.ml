@@ -404,12 +404,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         visitor#visit_stmt () (AST_generic_helpers.funcbody_to_stmt fdef.G.fbody);
         !returned_name
   in
-  let name_from_forward_ref_expr expr =
+  let name_from_deferred_ref_expr expr =
     match expr.G.e with
     | G.Call
-        ( { G.e = G.N forward_ref_name; _ },
+        ( { G.e = G.N deferred_ref_name; _ },
           (_, [ G.Arg { G.e = G.Lambda fdef; _ } ], _) )
-      when method_name_matches [ "forwardRef" ] forward_ref_name ->
+      when method_name_matches [ "forwardRef"; "delay" ] deferred_ref_name ->
         name_from_lambda_returned_name fdef
     | _ -> None
   in
@@ -474,7 +474,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                when is_class_like_name class_token ->
                  Some class_token
              | [ G.Arg key_expr ] -> (
-                 match name_from_forward_ref_expr key_expr with
+                 match name_from_deferred_ref_expr key_expr with
                  | Some class_token when is_class_like_name class_token ->
                      Some class_token
                  | _ -> name_from_property_key_expr key_expr)
@@ -1117,7 +1117,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     match expr.G.e with
     | G.N name when is_known_class name class_names -> Some name
     | _ -> (
-        match name_from_forward_ref_expr expr with
+        match name_from_deferred_ref_expr expr with
         | Some name when is_known_class name class_names -> Some name
         | _ -> None)
   in
@@ -1137,7 +1137,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           add_unique class_token key_names
       | _ -> key_names
     in
-    match name_from_forward_ref_expr key_expr with
+    match name_from_deferred_ref_expr key_expr with
     | Some class_token when is_known_class class_token class_names ->
         add_unique class_token key_names
     | _ -> key_names
@@ -1422,7 +1422,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     match expr.G.e with
     | G.N class_name when is_class_like_name class_name -> Some class_name
     | _ -> (
-        match name_from_forward_ref_expr expr with
+        match name_from_deferred_ref_expr expr with
         | Some class_name when is_known_class class_name class_names ->
             Some class_name
         | _ -> None)
