@@ -1282,6 +1282,57 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         add_unique class_token key_names
     | _ -> key_names
   in
+  let class_name_from_provider_dep_expr dep_expr =
+    match
+      provider_key_names_from_expr dep_expr
+      |> List.find_map class_name_from_injected_provider_key
+    with
+    | Some _ as class_name -> class_name
+    | None -> (
+        match class_name_from_class_reference dep_expr with
+        | Some class_name -> Some (class_name_from_provider_key_or_self class_name)
+        | None -> None)
+  in
+  let param_names_from_function fdef =
+    Tok.unbracket fdef.G.fparams
+    |> List.filter_map (function
+         | G.Param { G.pname = Some ((param_name, _)); pinfo; _ } ->
+             Some (G.Id ((param_name, Tok.unsafe_fake_tok param_name), pinfo))
+         | _ -> None)
+  in
+  let class_name_from_provider_factory_deps provider_expr deps_expr =
+    match (provider_expr.G.e, deps_expr.G.e) with
+    | ( G.Lambda fdef,
+        G.Container (G.Array, (_, dependency_exprs, _)) ) -> (
+        match name_from_lambda_returned_name fdef with
+        | Some returned_name -> (
+            let returned_param =
+              param_names_from_function fdef
+              |> List.mapi (fun index param_name -> (index, param_name))
+              |> List.find_opt (fun (_index, param_name) ->
+                     same_resolved_name returned_name param_name)
+            in
+            Option.bind returned_param (fun (index, _param_name) ->
+                match List.nth_opt dependency_exprs index with
+                | Some dependency_expr ->
+                    class_name_from_provider_dep_expr dependency_expr
+                | None -> None))
+        | None -> None)
+    | _ -> None
+  in
+  let class_name_from_provider_object_fields fields provider_method_name
+      provider_expr =
+    match class_name_from_provider_expr provider_method_name provider_expr with
+    | Some _ as class_name -> class_name
+    | None -> (
+        match
+          ( provider_method_name,
+            field_init_named [ "deps"; "inject" ] fields )
+        with
+        | ("toDynamicValue" | "useFactory" | "asFunction"), Some deps_expr ->
+            class_name_from_provider_factory_deps provider_expr deps_expr
+        | _ -> None)
+  in
   let class_mapping_from_provider_object_fields fields =
     match
       ( field_init_named [ "provide"; "token"; "name" ] fields,
@@ -1290,7 +1341,8 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | Some key_expr, Some (provider_method_name, provider_expr) -> (
         match
           ( provider_key_names_from_expr key_expr,
-            class_name_from_provider_expr provider_method_name provider_expr )
+            class_name_from_provider_object_fields fields provider_method_name
+              provider_expr )
         with
         | field_name :: _, Some class_name -> Some (field_name, class_name)
         | _ -> None)
@@ -1302,7 +1354,10 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         provider_field_entry fields )
     with
     | Some key_expr, Some (provider_method_name, provider_expr) -> (
-        match class_name_from_provider_expr provider_method_name provider_expr with
+        match
+          class_name_from_provider_object_fields fields provider_method_name
+            provider_expr
+        with
         | Some class_name ->
             let key_names = provider_key_names_from_expr key_expr in
             key_names |> List.map (fun key_name -> (key_name, class_name))
