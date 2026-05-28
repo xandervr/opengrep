@@ -394,8 +394,24 @@ let check_taint_signatures ~match_hook ~(timeout : timeout_config option)
   let { path = { internal_path_to_content = file; _ }; _ } : Xtarget.t =
     xtarget
   in
-  let per_rule_boilerplate_fn_opt = per_rule_boilerplate_fn_opt timeout file in
+  (* The interfile precompute runs over a synthetic "target" that is the
+   * combined AST of the whole repo, so the per-file [timeout_threshold] (which
+   * exists to skip a single pathological file once a few rules time out on it)
+   * does not apply here: there is no individual file to skip. Worse, raising
+   * [File_timeout] aborts the whole precompute AND escapes before the caller
+   * can cache the result, so the (expensive) precompute would be retried from
+   * scratch for every interfile target. We keep the per-rule [timeout] so a
+   * pathological rule is still bounded, but disable the threshold so a slow
+   * rule degrades into a per-rule timeout error (feeding the bounded
+   * [limit_to_taint_files] fallback) instead of aborting and re-running. *)
+  let precompute_timeout =
+    Option.map (fun (tc : timeout_config) -> { tc with threshold = 0 }) timeout
+  in
   let run ?limit_to_taint_files () =
+    (* Fresh per-rule timeout state per run so the fallback gets its own budget. *)
+    let per_rule_boilerplate_fn_opt =
+      per_rule_boilerplate_fn_opt precompute_timeout file
+    in
     let taint_rules_groups, _nontaint_rules, _skipped_rules =
       group_rules xconf rules xtarget
     in

@@ -982,9 +982,26 @@ let mk_target_handler (caps : < Cap.time_limit >) (config : Core_scan_config.t)
                           Xtarget.resolve_with_ast (lazy ast) target
                         in
                         let cached =
-                          Match_rules.check_taint_signatures ~match_hook
-                            ~timeout interfile_xconf interfile_rules
-                            interfile_xtarget
+                          (* The interfile precompute is shared across all
+                           * targets via [interfile_result_cache]. If it crashes
+                           * (timeout/OOM on the combined whole-repo AST) we must
+                           * still cache a degraded result, otherwise it would be
+                           * re-run -- and re-fail -- for every interfile target,
+                           * serialized on this mutex. *)
+                          try
+                            Match_rules.check_taint_signatures ~match_hook
+                              ~timeout interfile_xconf interfile_rules
+                              interfile_xtarget
+                          with
+                          | Match_rules.File_timeout _ | Out_of_memory
+                          | Stack_overflow
+                          | Memory_limit.ExceededMemoryLimit _ ->
+                              ( {
+                                  Match_tainting_mode.signature_dbs = [];
+                                  sink_files = [];
+                                  shared_call_graphs = [];
+                                },
+                                empty_matches_single_file )
                         in
                         Hashtbl.add interfile_result_cache cache_key cached;
                         cached)
