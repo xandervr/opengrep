@@ -53,6 +53,7 @@
 - JavaScript provider method aliases now resolve through `asClass`, `asValue`, and `asFunction`, matching the existing class/value/factory provider semantics.
 - JavaScript registration-map containers now resolve `register({ source: asClass(Source) })`, `asValue(new Source())`, and `asFunction(() => new Source())` provider specs consumed through `resolve("source")`.
 - JavaScript provider alias containers now resolve `useExisting`, `toService`, and `aliasTo` provider aliases when the aliased provider key already has a class/value/factory binding.
+- JavaScript and TypeScript async provider containers now resolve async dynamic factories consumed through `await container.getAsync("source")` and `await container.resolveAsync("source")`.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
 - JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, dynamic-keyed, dynamic-template-keyed, chained map, container API, provider-binding, provider API alias, provider method alias, provider alias, and registration-map service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
 
@@ -130,6 +131,7 @@
 - `14c75e4c5` - `fix: resolve typescript decorated metadata injection` (signed)
 - `8dd119409` - `fix: resolve typescript injectable constructor metadata` (signed)
 - `b4762cf89` - `fix: resolve javascript provider alias containers` (signed)
+- `53a4152cc` - `fix: resolve async provider containers` (signed)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -153,7 +155,7 @@ The Docker-built help text now says:
     not support taint mode.
 ```
 
-**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, or DI-class constructor type metadata, such as metadata without statically visible class types, hierarchical/scoped containers, async providers, and additional library-specific provider APIs. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
+**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, DI-class constructor type metadata, or async `getAsync`/`resolveAsync` provider reads, such as metadata without statically visible class types, hierarchical/scoped containers, provider lifecycle/scoping APIs, and additional library-specific provider APIs. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
 
 **Next concrete actions:**
 
@@ -166,6 +168,37 @@ Latest side-effect sanitizer verification:
 
 ```text
 taint_interfile_python_side_effect_sanitizer count=1 expected=1 errors=0 interfile_lang_count=1
+```
+
+Latest async-provider red proof before `53a4152cc`:
+
+```text
+async_provider_red count=1 expected=3 errors=0 interfile_lang_count=2
+rules.taint_interfile_async_provider_container    targets/taint_interfile_async_provider_container/typescript/app.ts    11
+```
+
+Latest async-provider green proof after `53a4152cc`:
+
+```text
+async_provider_green count=3 expected=3 errors=0 interfile_lang_count=2
+rules.taint_interfile_async_provider_container    targets/taint_interfile_async_provider_container/get_async/app.js    9
+rules.taint_interfile_async_provider_container    targets/taint_interfile_async_provider_container/resolve_async/app.js    9
+rules.taint_interfile_async_provider_container    targets/taint_interfile_async_provider_container/typescript/app.ts    11
+```
+
+Latest broad Docker direct scan matrix after `53a4152cc`:
+
+```text
+taint_interfile_async_provider_container count=3 expected=3 errors=0 interfile_lang_count=2 status=0
+taint_interfile_js_constructor_parameter_provider_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_js_constructor_parameter_provider_api_alias_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_js_constructor_parameter_provider_method_alias_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_js_constructor_parameter_provider_alias_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_typescript_decorated_metadata_injection count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_typescript_injectable_constructor_metadata count=2 expected=2 errors=0 interfile_lang_count=1 status=0
+taint_interfile_language_matrix count=28 expected=28 errors=0 interfile_lang_count=28 status=0
+taint_interfile_parser_smoke count=13 expected=13 errors=0 interfile_lang_count=13 status=0
+matrix_failures=0
 ```
 
 Latest Python inheritance red proof before `8c72876d`:
