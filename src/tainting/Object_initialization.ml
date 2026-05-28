@@ -1188,13 +1188,40 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | None -> ()
   in
   let record_object_property_provider_mapping expr =
-    match object_property_provider_call_from_expr expr with
+    let record_to_self_mapping expr =
+      let expr = unwrap_provider_lifecycle_expr expr in
+      match expr.G.e with
+      | G.Call
+          ( { e = G.DotAccess (bind_expr, _, G.FN self_method_name); _ },
+            (_, [], _) )
+        when method_name_matches [ "toSelf" ] self_method_name -> (
+          match bind_expr.G.e with
+          | G.Call
+              ( { e = G.DotAccess (obj_expr, _, G.FN bind_method_name); _ },
+                (_, [ G.Arg key_expr ], _) ) -> (
+              match
+                ( is_object_property_set_method_name bind_method_name,
+                  name_from_property_key_expr key_expr,
+                  class_name_from_class_reference key_expr )
+              with
+              | true, Some field_name, Some class_name -> (
+                  match object_property_path_from_base obj_expr field_name with
+                  | Some (obj_name, field_path) ->
+                      record_object_property_class_mapping obj_name field_path
+                        class_name
+                  | None -> ())
+              | _ -> ())
+          | _ -> ())
+      | _ -> ()
+    in
+    (match object_property_provider_call_from_expr expr with
     | Some (obj_name, field_path, provider_method_name, provider_expr) -> (
         match class_name_from_provider_expr provider_method_name provider_expr with
         | Some class_name ->
             record_object_property_class_mapping obj_name field_path class_name
         | None -> ())
-    | None -> ()
+    | None -> ());
+    record_to_self_mapping expr
   in
   let field_init_named names fields =
     fields
