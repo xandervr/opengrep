@@ -780,7 +780,7 @@ def test_interfile_taint_flows_through_javascript_map_service_containers(
     results = sorted(output["results"], key=lambda result: result["path"])
 
     assert output["interfile_languages_used"] == ["JavaScript"]
-    assert len(results) == 3
+    assert len(results) == 4
     assert all(
         result["check_id"]
         == "rules.taint_interfile_js_constructor_parameter_map_service_container"

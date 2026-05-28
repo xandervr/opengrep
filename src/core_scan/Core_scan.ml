@@ -865,9 +865,13 @@ let mk_target_handler (caps : < Cap.time_limit >) (config : Core_scan_config.t)
     (interfile_asts_by_analyzer :
       (Lang.t, AST_generic.program * Tok.location list) Hashtbl.t)
     (prefilter_cache_opt : Match_env.prefilter_config) : target_handler =
+  (* Cross-file taint findings for the whole merged (per-language) AST, computed
+   * once per (analyzer, rule-set) and then distributed to each target file.
+   * Analyzing the merged program directly is what makes cross-file source,
+   * sink, value, object-method, propagator, and sanitizer flows resolve; we
+   * pay that cost once instead of once per target. *)
   let interfile_result_cache :
-      (string, Match_rules.interfile_taint_cache * Core_result.matches_single_file)
-      Hashtbl.t =
+      (string, Core_result.matches_single_file) Hashtbl.t =
     Hashtbl.create 8
   in
   let interfile_result_cache_mutex = Mutex.create () in
@@ -973,7 +977,7 @@ let mk_target_handler (caps : < Cap.time_limit >) (config : Core_scan_config.t)
               let interfile_xconf =
                 { xconf with filter_irrelevant_rules = NoPrefiltering }
               in
-              let interfile_taint_cache, precompute_matches =
+              let all_interfile_matches =
                 Mutex.protect interfile_result_cache_mutex (fun () ->
                     match Hashtbl.find_opt interfile_result_cache cache_key with
                     | Some cached -> cached
@@ -982,60 +986,36 @@ let mk_target_handler (caps : < Cap.time_limit >) (config : Core_scan_config.t)
                           Xtarget.resolve_with_ast (lazy ast) target
                         in
                         let cached =
-                          (* The interfile precompute is shared across all
-                           * targets via [interfile_result_cache]. If it crashes
-                           * (timeout/OOM on the combined whole-repo AST) we must
-                           * still cache a degraded result, otherwise it would be
-                           * re-run -- and re-fail -- for every interfile target,
-                           * serialized on this mutex. *)
+                          (* Run the cross-file taint analysis ONCE over the
+                           * merged whole-repo AST and record its findings. This
+                           * stays bounded to the source/sink-relevant functions
+                           * (so it is fast) while seeing the full merged program
+                           * (so imported values, object methods, propagators and
+                           * sanitizers resolve across files). The result is
+                           * cached and distributed to each target file below; we
+                           * do not re-run a per-file pass (which only sees one
+                           * file's AST and therefore loses cross-file flows).
+                           *
+                           * On a crash on the combined AST we cache a degraded
+                           * empty result so it is not re-run (and re-failed) for
+                           * every target while serialized on this mutex. *)
                           try
-                            Match_rules.check_taint_signatures ~match_hook
-                              ~timeout interfile_xconf interfile_rules
-                              interfile_xtarget
+                            let _cache, matches =
+                              Match_rules.check_taint_signatures ~match_hook
+                                ~timeout interfile_xconf interfile_rules
+                                interfile_xtarget
+                            in
+                            matches
                           with
                           | Match_rules.File_timeout _ | Out_of_memory
                           | Stack_overflow
                           | Memory_limit.ExceededMemoryLimit _ ->
-                              ( {
-                                  Match_tainting_mode.signature_dbs = [];
-                                  sink_files = [];
-                                  shared_call_graphs = [];
-                                },
-                                empty_matches_single_file )
+                              empty_matches_single_file
                         in
                         Hashtbl.add interfile_result_cache cache_key cached;
                         cached)
               in
-              let cached_rule_ids =
-                interfile_taint_cache.Match_tainting_mode.signature_dbs
-                |> List_.map fst
-              in
-              let rule_has_sink_in_file rule_id =
-                interfile_taint_cache.Match_tainting_mode.sink_files
-                |> List.exists (fun (cached_rule_id, files) ->
-                       Rule_ID.equal cached_rule_id rule_id
-                       && List.exists (Fpath.equal file) files)
-              in
-              let interfile_rules =
-                interfile_rules
-                |> List.filter (fun rule ->
-                       let rule_id = fst rule.R.id in
-                       List.exists
-                         (fun cached_rule_id ->
-                           Rule_ID.equal cached_rule_id rule_id)
-                         cached_rule_ids
-                       && rule_has_sink_in_file rule_id)
-              in
-              let file_interfile_matches =
-                if List_.null interfile_rules then empty_matches_single_file
-                else
-                  Match_rules.check ~match_hook ~timeout ~dependency_match_table
-                    ~interfile_taint_cache interfile_xconf interfile_rules
-                    xtarget
-              in
-              combine_match_results
-                (keep_matches_in_file file precompute_matches)
-                file_interfile_matches
+              keep_matches_in_file file all_interfile_matches
         in
         combine_match_results regular_matches interfile_matches
       in

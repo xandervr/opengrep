@@ -572,8 +572,28 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
     | Some (taint_inst, spec_matches, expls) ->
         let source_files = files_of_spec_matches spec_matches.sources in
         let sink_files = files_of_spec_matches spec_matches.sinks in
+        (* Set once the source/sink containing functions are known: true when a
+         * source or sink sits at module scope (not inside any function). Used to
+         * skip the (potentially O(repo)) top-level pass during the interfile
+         * precompute when every source and sink is inside a function. *)
+        let has_top_level_specs = ref false in
         let ast_for_analysis =
           if signatures_only && limit_to_taint_files then
+            filter_program_to_files
+              (List.sort_uniq Fpath.compare (source_files @ sink_files))
+              ast
+          else ast
+        in
+        (* The top-level and object-initialization passes treat each file's
+         * module scope as an anonymous function. Over the merged whole-repo AST
+         * that would be O(repo) and dominate the interfile precompute, but a
+         * top-level/module-scope flow has its source and sink in files that
+         * contain those patterns, so during the interfile precompute we bound
+         * those passes to the source/sink files (cross-function flows still use
+         * the full merged AST via [ast_for_analysis] and per-function
+         * signatures). *)
+        let toplevel_scope_ast =
+          if signatures_only then
             filter_program_to_files
               (List.sort_uniq Fpath.compare (source_files @ sink_files))
               ast
@@ -582,7 +602,10 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
         let glob_env, glob_effects =
           Taint_input_env.mk_file_env taint_inst ast_for_analysis
         in
-        if not signatures_only then record_matches glob_effects;
+        (* Record top-level/module-scope findings during the interfile precompute
+         * too (see the function-pass comment below); only the precomputed
+         * per-file re-application should skip recording to avoid duplicates. *)
+        if not use_precomputed_signatures then record_matches glob_effects;
 
         (* Only use signature database if cross-function taint analysis is enabled *)
         let final_signature_db, relevant_graph, shared_call_graph_for_cache =
@@ -755,6 +778,9 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
               Graph_from_AST.find_functions_containing_ranges ~lang
                 ast_for_analysis sink_ranges
             in
+            has_top_level_specs :=
+              List.exists function_id_is_top_level
+                (source_functions @ sink_functions);
 
             Log.debug (fun m ->
                 m "SUBGRAPH: Found %d source functions and %d sink functions"
@@ -820,19 +846,15 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
           close_out dot_file;
           Log.debug (fun m -> m "SUBGRAPH: Wrote call graph to call_graph.dot"); *)
             let signature_graph =
-              if signatures_only then (
-                let roots =
-                  sink_functions
-                  @ (source_functions
-                    |> List.filter (fun fn_id ->
-                           not (function_id_is_top_level fn_id)))
-                in
-                let graph =
-                  Graph_reachability.forward_reachable_subgraph call_graph roots
-                in
-                List.iter (Call_graph.G.add_vertex graph) roots;
-                graph)
-              else if use_precomputed_signatures then (
+              (* The interfile precompute ([signatures_only]) needs signatures for
+               * the callees of sink functions too -- e.g. an imported propagator
+               * ([items.push(value)]) or sanitizer ([sanitize(value)]) function
+               * that a sink function calls. A forward-reachable-from-sinks graph
+               * excludes those callees, so we use the same relevant subgraph as
+               * the regular analysis (functions on source->sink paths plus the
+               * source/sink containers), which keeps callees in the analysis
+               * order so their effects are summarized before their callers. *)
+              if use_precomputed_signatures then (
                 List.iter
                   (fun info ->
                     Call_graph.G.add_vertex relevant_graph
@@ -1015,7 +1037,17 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
             in
 
             let final_signature_db = signature_db_after_order in
-            if not signatures_only then
+            (* Record concrete cross-file findings here, even in
+             * [signatures_only] (interfile precompute) mode. This pass analyzes
+             * each relevant function over the MERGED whole-repo AST with every
+             * callee signature already in [final_signature_db] and the merged
+             * global env, so it surfaces cross-file source/sink flows (including
+             * imported values, propagators, and sanitizers) that a per-file
+             * pass cannot see. It stays bounded to [analysis_order] (the
+             * source/sink-relevant functions), so it keeps the precompute fast.
+             * The findings are returned as the rule's matches and distributed
+             * to each file by the caller; the per-file re-analysis is dropped. *)
+            if not use_precomputed_signatures then
               List.iter
                 (fun node ->
                   match Shape_and_sig.FunctionMap.find_opt node info_map with
@@ -1071,8 +1103,10 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
             (None, None, None))
         in
 
-        if not signatures_only then
-          (* Check execution of statements during object initialization. *)
+        if not use_precomputed_signatures then
+          (* Check execution of statements during object initialization.
+           * Bounded to the source/sink files during the interfile precompute
+           * (see [toplevel_scope_ast]). *)
           Visit_class_defs.visit
             (fun opt_ent cdef ->
               let opt_name =
@@ -1093,17 +1127,22 @@ let check_rule per_file_formula_cache (rule : R.taint_rule) match_hook
                   IL.{ params = []; cfg; lambdas }
               in
               record_matches init_effects)
-            ast;
+            toplevel_scope_ast;
 
         (* Check the top-level statements.
          * In scripting languages it is not unusual to write code outside
          * function declarations and we want to check this too. We simply
          * treat the program itself as an anonymous function. *)
         let (), match_time =
-          if signatures_only then ((), 0.0)
+          if
+            use_precomputed_signatures
+            || (signatures_only && not !has_top_level_specs)
+          then ((), 0.0)
           else
             Common.with_time (fun () ->
-                let xs = AST_to_IL.stmt taint_inst.lang (G.stmt1 ast) in
+                let xs =
+                  AST_to_IL.stmt taint_inst.lang (G.stmt1 toplevel_scope_ast)
+                in
                 let cfg, lambdas = CFG_build.cfg_of_stmts xs in
                 let top_level_name =
                   let fake_tok = Tok.unsafe_fake_tok "<top_level>" in
