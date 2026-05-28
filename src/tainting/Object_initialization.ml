@@ -1259,11 +1259,21 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | _ -> ()
   in
   let rec record_provider_metadata_mapping expr =
-    let record_provider_array_exprs provider_exprs =
+    let rec record_provider_array_exprs provider_exprs =
       provider_exprs
       |> List.iter (function
            | { G.e = G.Record (_, fields, _); _ } ->
                record_provider_metadata_object fields
+           | {
+               G.e =
+                 G.Call
+                   ( { G.e = G.IdSpecial (G.Spread, _); _ },
+                     (_, [ G.Arg { G.e = G.N provider_name; _ } ], _) );
+               _;
+             } -> (
+               match provider_array_exprs_from_name provider_name with
+               | Some provider_exprs -> record_provider_array_exprs provider_exprs
+               | None -> ())
            | _ -> ())
     in
     match expr.G.e with
