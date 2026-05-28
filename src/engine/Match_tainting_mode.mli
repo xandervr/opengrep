@@ -1,18 +1,23 @@
 val hook_setup_hook_function_taint_signature :
   (Rule.taint_rule -> Taint_rule_inst.t -> Xtarget.t -> unit) option ref
 (** This is used for intra-file inter-procedural taint-tracking, and the idea is
-  * that this hook will do top-sorting and infer the signature of each function
-  * in the file, and while doing this it will also setup
-  * 'Dataflow_tainting.hook_function_taint_signature'.
-  *
-  * Doing it here (vs what DeepSemgrep does) has the advantage that we can re-use
-  * the same 'Dataflow_tainting.config' without having to do any caching on disk.
-  *
-  * FIXME: Once we have the taint signature of a function we do not need to run
-  *   taint tracking on it anymore... but we still do it hence duplicating work.
-  *   We only need to analyze anonymous functions which do not get taint signatures
-  *   (or we could infer a signature for them too...).
-  *)
+    * that this hook will do top-sorting and infer the signature of each
+    function * in the file, and while doing this it will also setup *
+    'Dataflow_tainting.hook_function_taint_signature'. * * Doing it here (vs
+    what DeepSemgrep does) has the advantage that we can re-use * the same
+    'Dataflow_tainting.config' without having to do any caching on disk. * *
+    FIXME: Once we have the taint signature of a function we do not need to run
+    * taint tracking on it anymore... but we still do it hence duplicating work.
+    * We only need to analyze anonymous functions which do not get taint
+    signatures * (or we could infer a signature for them too...). *)
+
+type interfile_taint_cache = {
+  signature_dbs : (Rule_ID.t * Shape_and_sig.signature_database) list;
+  sink_files : (Rule_ID.t * Fpath.t list) list;
+  shared_call_graphs :
+    (Lang.t * (Call_graph.G.t * (AST_generic.name * AST_generic.name) list))
+    list;
+}
 
 val check_fundef :
   Taint_rule_inst.t ->
@@ -24,12 +29,10 @@ val check_fundef :
   ?call_graph:Call_graph.G.t ->
   AST_generic.function_definition ->
   IL.fun_cfg * Shape_and_sig.Effects.t * Dataflow_tainting.mapping
-(** Check a function definition using a [Dataflow_tainting.config] (which can
-  * be obtained with [taint_config_of_rule]). Findings are passed on-the-fly
-  * to the [handle_findings] callback in the dataflow config.
-  *
-  * This is a low-level function exposed for debugging purposes (-dfg_tainting).
-  *)
+(** Check a function definition using a [Dataflow_tainting.config] (which can *
+    be obtained with [taint_config_of_rule]). Findings are passed on-the-fly *
+    to the [handle_findings] callback in the dataflow config. * * This is a
+    low-level function exposed for debugging purposes (-dfg_tainting). *)
 
 val check_rule :
   Formula_cache.t ->
@@ -37,13 +40,20 @@ val check_rule :
   (Core_match.t list -> Core_match.t list) ->
   ?signature_db:Shape_and_sig.signature_database ->
   ?builtin_signature_db:Shape_and_sig.builtin_signature_database ->
-  ?shared_call_graph:(Call_graph.G.t * (AST_generic.name * AST_generic.name) list) option ->
+  ?shared_call_graph:
+    (Call_graph.G.t * (AST_generic.name * AST_generic.name) list) option ->
+  ?signatures_only:bool ->
+  ?use_precomputed_signatures:bool ->
+  ?limit_to_taint_files:bool ->
   Match_env.xconfig ->
   Xtarget.t ->
-  Core_profiling.rule_profiling Core_result.match_result option * Shape_and_sig.signature_database option
+  Core_profiling.rule_profiling Core_result.match_result option
+  * Shape_and_sig.signature_database option
+  * Fpath.t list option
+  * (Lang.t * (Call_graph.G.t * (AST_generic.name * AST_generic.name) list))
+    option
 (** Check a single taint rule on a target. Returns both the match result and the
-  * computed signature database (when taint_intrafile is enabled).
-  *)
+    * computed signature database (when taint_intrafile is enabled). *)
 
 val check_rules :
   match_hook:(Core_match.t list -> Core_match.t list) ->
@@ -51,12 +61,25 @@ val check_rules :
     (Rule.rule ->
     (unit -> Core_profiling.rule_profiling Core_result.match_result option) ->
     Core_profiling.rule_profiling Core_result.match_result option) ->
+  ?interfile_taint_cache:interfile_taint_cache ->
   Rule.taint_rule list ->
   Match_env.xconfig ->
   Xtarget.t ->
   (* timeout function *)
   Core_profiling.rule_profiling Core_result.match_result list
-(** Runs the engine on a group of taint rules, which should be for the
-  * same language. Running on multiple rules at once enables inter-rule
-  * optimizations.
-  *)
+(** Runs the engine on a group of taint rules, which should be for the * same
+    language. Running on multiple rules at once enables inter-rule *
+    optimizations. *)
+
+val check_rules_and_collect_interfile_signatures :
+  match_hook:(Core_match.t list -> Core_match.t list) ->
+  per_rule_boilerplate_fn:
+    (Rule.rule ->
+    (unit -> Core_profiling.rule_profiling Core_result.match_result option) ->
+    Core_profiling.rule_profiling Core_result.match_result option) ->
+  ?limit_to_taint_files:bool ->
+  Rule.taint_rule list ->
+  Match_env.xconfig ->
+  Xtarget.t ->
+  Core_profiling.rule_profiling Core_result.match_result list
+  * interfile_taint_cache

@@ -47,6 +47,8 @@ type timeout_config = {
   caps : < Cap.time_limit >;
 }
 
+type interfile_taint_cache = Match_tainting_mode.interfile_taint_cache
+
 (*****************************************************************************)
 (* Helpers *)
 (*****************************************************************************)
@@ -56,48 +58,53 @@ let timeout_function (rule : Rule.t) (file : Fpath.t)
   let timeout =
     match timeout with
     | None -> None
-    | Some { timeout; caps; threshold = _;
-             allow_rule_timeout_control; dynamic_timeout;
-             dynamic_timeout_max_multiplier; dynamic_timeout_unit_kb } ->
+    | Some
+        {
+          timeout;
+          caps;
+          threshold = _;
+          allow_rule_timeout_control;
+          dynamic_timeout;
+          dynamic_timeout_max_multiplier;
+          dynamic_timeout_unit_kb;
+        } ->
         if timeout <= 0. then None
         else
-
           let dynamic_timeout =
-            match allow_rule_timeout_control, rule.Rule.options with
+            match (allow_rule_timeout_control, rule.Rule.options) with
             | true, Some { dynamic_timeout = Some dt; _ } -> dt
             | _ -> dynamic_timeout
           in
 
           let timeout =
-            match allow_rule_timeout_control, rule.Rule.options with
+            match (allow_rule_timeout_control, rule.Rule.options) with
             | true, Some { timeout = Some tm; _ } ->
-              Log.info (fun m ->
-                  m "setting timeout for %s to %.2fs using a rule override"
-                    !!file tm);
-              tm
+                Log.info (fun m ->
+                    m "setting timeout for %s to %.2fs using a rule override"
+                      !!file tm);
+                tm
             | _ -> timeout
           in
 
-          if not dynamic_timeout
-          then
-            Some (timeout, caps)
+          if not dynamic_timeout then Some (timeout, caps)
           else
-
             let dynamic_timeout_unit_kb =
-              match allow_rule_timeout_control, rule.Rule.options with
+              match (allow_rule_timeout_control, rule.Rule.options) with
               | true, Some { dynamic_timeout_unit_kb = Some dtk; _ } -> dtk
               | _ -> dynamic_timeout_unit_kb
             in
 
             let dynamic_timeout_max_multiplier =
-              match allow_rule_timeout_control, rule.Rule.options with
-              | true, Some { dynamic_timeout_max_multiplier = Some dtm; _ } -> dtm
+              match (allow_rule_timeout_control, rule.Rule.options) with
+              | true, Some { dynamic_timeout_max_multiplier = Some dtm; _ } ->
+                  dtm
               | _ -> dynamic_timeout_max_multiplier
             in
 
             (* We use Spacegrep's [stat] because it's cached, and we don't want to repeat the call
              * for each rule. Otherwise we could use [UFile.filesize]. *)
-            let filesize_kb = float_of_int (Spacegrep.Find_files.stat !!file).st_size /. 1024.
+            let filesize_kb =
+              float_of_int (Spacegrep.Find_files.stat !!file).st_size /. 1024.
             in
             (* Multiply timeout by the number of [dynamic_timeout_unit_kb] blocks in the file. *)
             let timeout_multiplier =
@@ -107,7 +114,9 @@ let timeout_function (rule : Rule.t) (file : Fpath.t)
             in
             let size_adjusted_timeout = timeout *. timeout_multiplier in
             Log.info (fun m ->
-                m "setting timeout for %s to %.2fs using a factor of %.2f derived from the file size"
+                m
+                  "setting timeout for %s to %.2fs using a factor of %.2f \
+                   derived from the file size"
                   !!file size_adjusted_timeout timeout_multiplier);
             Some (size_adjusted_timeout, caps)
   in
@@ -136,14 +145,16 @@ let is_relevant_rule_for_xtarget r xconf xtarget =
         match Analyze_rule.regexp_prefilter_of_rule ~cache:(Some cache) r with
         | None -> true
         | Some (prefilter_formula, func) ->
-          (* NOTE: If [lazy_content] is shared in > 1 thread, then this is not
-           * thread-safe. However, each [Xtarget.t] is only accessed in 1 worker
-           * task, so there should be no race. *)
-          let content = Lazy.force lazy_content in
-          Log.info (fun m ->
-              let s = Semgrep_prefilter_j.string_of_formula prefilter_formula in
-              m "looking for %s in %s" s !!internal_path_to_content);
-          func content)
+            (* NOTE: If [lazy_content] is shared in > 1 thread, then this is not
+             * thread-safe. However, each [Xtarget.t] is only accessed in 1 worker
+             * task, so there should be no race. *)
+            let content = Lazy.force lazy_content in
+            Log.info (fun m ->
+                let s =
+                  Semgrep_prefilter_j.string_of_formula prefilter_formula
+                in
+                m "looking for %s in %s" s !!internal_path_to_content);
+            func content)
   in
   if not is_relevant then
     Log.info (fun m ->
@@ -248,9 +259,10 @@ let per_rule_boilerplate_fn_opt (timeout : timeout_config option) =
         | _else_ -> ());
         let loc = Tok.first_loc_of_file file in
         let error = E.mk_error ~rule_id ~loc OutJ.Timeout in
-        Some (RP.mk_match_result []
-          (Core_error.ErrorSet.singleton error)
-          (Core_profiling.empty_rule_profiling rule))
+        Some
+          (RP.mk_match_result []
+             (Core_error.ErrorSet.singleton error)
+             (Core_profiling.empty_rule_profiling rule))
 
 let scc_match_hook (match_hook : Core_match.t -> unit)
     (dependency_match_table : Match_SCA_mode.dependency_match_table option) :
@@ -276,9 +288,9 @@ let scc_match_hook (match_hook : Core_match.t -> unit)
 
 let check
     ?(dependency_match_table : Match_SCA_mode.dependency_match_table option)
-    ~match_hook ~(timeout : timeout_config option) (xconf : Match_env.xconfig)
-    (rules : Rule.rules) (xtarget : Xtarget.t) : Core_result.matches_single_file
-    =
+    ?interfile_taint_cache ~match_hook ~(timeout : timeout_config option)
+    (xconf : Match_env.xconfig) (rules : Rule.rules) (xtarget : Xtarget.t) :
+    Core_result.matches_single_file =
   let match_hook = scc_match_hook match_hook dependency_match_table in
 
   let {
@@ -320,7 +332,7 @@ let check
     |> List.concat_map (fun taint_rules ->
            Match_tainting_mode.check_rules ~match_hook
              ~per_rule_boilerplate_fn:per_rule_boilerplate_fn_opt
-             taint_rules xconf xtarget)
+             ?interfile_taint_cache taint_rules xconf xtarget)
   in
   let res_nontaint_rules =
     nontaint_rules
@@ -374,3 +386,58 @@ let check
    * intermediate match_result).
    *)
   RP.collate_rule_results xtarget.path.internal_path_to_content res_total
+
+let check_taint_signatures ~match_hook ~(timeout : timeout_config option)
+    (xconf : Match_env.xconfig) (rules : Rule.rules) (xtarget : Xtarget.t) :
+    interfile_taint_cache * Core_result.matches_single_file =
+  let match_hook = scc_match_hook match_hook None in
+  let { path = { internal_path_to_content = file; _ }; _ } : Xtarget.t =
+    xtarget
+  in
+  let per_rule_boilerplate_fn_opt = per_rule_boilerplate_fn_opt timeout file in
+  let run ?limit_to_taint_files () =
+    let taint_rules_groups, _nontaint_rules, _skipped_rules =
+      group_rules xconf rules xtarget
+    in
+    let results, cache =
+      taint_rules_groups
+      |> List.fold_left
+           (fun (results, cache) taint_rules ->
+             let group_results, group_cache =
+               Match_tainting_mode.check_rules_and_collect_interfile_signatures
+                 ~match_hook
+                 ~per_rule_boilerplate_fn:per_rule_boilerplate_fn_opt
+                 ?limit_to_taint_files taint_rules xconf xtarget
+             in
+             ( results @ group_results,
+               {
+                 Match_tainting_mode.signature_dbs =
+                   cache.Match_tainting_mode.signature_dbs
+                   @ group_cache.Match_tainting_mode.signature_dbs;
+                 sink_files =
+                   cache.Match_tainting_mode.sink_files
+                   @ group_cache.Match_tainting_mode.sink_files;
+                 shared_call_graphs =
+                   cache.Match_tainting_mode.shared_call_graphs
+                   @ group_cache.Match_tainting_mode.shared_call_graphs;
+               } ))
+           ( [],
+             {
+               Match_tainting_mode.signature_dbs = [];
+               sink_files = [];
+               shared_call_graphs = [];
+             } )
+    in
+    (cache, RP.collate_rule_results file results)
+  in
+  let cache, result = run () in
+  if Core_error.ErrorSet.is_empty result.errors then (cache, result)
+  else
+    let fallback_cache, fallback_result = run ~limit_to_taint_files:true () in
+    if Core_error.ErrorSet.is_empty fallback_result.errors then
+      let cache =
+        if List_.null cache.Match_tainting_mode.signature_dbs then fallback_cache
+        else cache
+      in
+      (cache, fallback_result)
+    else (cache, result)

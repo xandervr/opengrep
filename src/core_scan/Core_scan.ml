@@ -768,17 +768,19 @@ let interfile_rule_applies_to_analyzer (interfile_rules : Rule.t list)
   |> List.exists (fun (rule : Rule.t) ->
          Xlang.is_compatible ~require:analyzer ~provide:rule.target_analyzer)
 
-let build_interfile_asts_by_analyzer (targets : Target.t list)
-    (valid_rules : Rule.t list) ~(force_interfile : bool) :
+let build_interfile_asts_by_analyzer (caps : < Cap.fork >) (ncores : int)
+    (targets : Target.t list) (valid_rules : Rule.t list)
+    ~(force_interfile : bool) :
     (Lang.t, AST_generic.program * Tok.location list) Hashtbl.t =
   let asts_by_analyzer = Hashtbl.create 8 in
   let interfile_rules =
     List.filter (is_interfile_taint_rule ~force_interfile) valid_rules
   in
-  if not (List_.null interfile_rules) then
-    targets
-    |> List.iter (function
-         | Target.Lockfile _ -> ()
+  if not (List_.null interfile_rules) then (
+    let parsed =
+      targets
+      |> Parallel_targets.map_targets caps ncores (function
+         | Target.Lockfile _ -> None
          | Target.Regular target
            when supports_interfile_taint target.analyzer
                 && interfile_rule_applies_to_analyzer interfile_rules
@@ -788,20 +790,30 @@ let build_interfile_asts_by_analyzer (targets : Target.t list)
                let ast, skipped_tokens =
                  parse_and_resolve_name lang target.path.internal_path_to_content
                in
-               let asts, skipped =
-                 match Hashtbl.find_opt asts_by_analyzer lang with
-                 | None -> ([], [])
-                 | Some (asts, skipped) -> (asts, skipped)
-               in
-               Hashtbl.replace asts_by_analyzer lang
-                 (ast @ asts, skipped_tokens @ skipped)
+               Some (lang, ast, skipped_tokens)
              with
              | exn ->
                  Logs.debug (fun m ->
                      m "Skipping interfile taint preparse for %s: %s"
                        !!(target.path.internal_path_to_content)
-                       (Common.exn_to_s exn)))
-         | Target.Regular _ -> ());
+                       (Common.exn_to_s exn));
+                 None)
+         | Target.Regular _ -> None)
+    in
+    parsed |> List.iter (function
+         | Ok None -> ()
+         | Ok (Some (lang, ast, skipped_tokens)) ->
+             let asts, skipped =
+               match Hashtbl.find_opt asts_by_analyzer lang with
+               | None -> ([], [])
+               | Some (asts, skipped) -> (asts, skipped)
+             in
+             Hashtbl.replace asts_by_analyzer lang
+               (ast @ asts, skipped_tokens @ skipped)
+         | Error (_target, error) ->
+             Logs.debug (fun m ->
+                 m "Skipping interfile taint preparse target after error: %s"
+                   (Core_error.string_of_error error))));
   asts_by_analyzer
 
 let interfile_ast_for_target asts_by_analyzer (target : Target.regular) :
@@ -822,7 +834,14 @@ let keep_matches_in_file (file : Fpath.t)
            let start_loc, _end_loc = pm.range_loc in
            Fpath.equal start_loc.pos.file file)
   in
-  { result with matches = filtered_matches }
+  let filtered_errors =
+    result.errors
+    |> ESet.filter (fun (error : E.t) ->
+           match error.loc with
+           | Some loc -> Fpath.equal loc.pos.file file
+           | None -> true)
+  in
+  { result with matches = filtered_matches; errors = filtered_errors }
 
 let empty_matches_single_file : Core_result.matches_single_file =
   { matches = []; errors = ESet.empty; profiling = None; explanations = [] }
@@ -846,6 +865,21 @@ let mk_target_handler (caps : < Cap.time_limit >) (config : Core_scan_config.t)
     (interfile_asts_by_analyzer :
       (Lang.t, AST_generic.program * Tok.location list) Hashtbl.t)
     (prefilter_cache_opt : Match_env.prefilter_config) : target_handler =
+  let interfile_result_cache :
+      (string, Match_rules.interfile_taint_cache * Core_result.matches_single_file)
+      Hashtbl.t =
+    Hashtbl.create 8
+  in
+  let interfile_result_cache_mutex = Mutex.create () in
+  let interfile_cache_key analyzer rules =
+    let rule_ids =
+      rules
+      |> List_.map (fun (rule : Rule.t) ->
+             Rule_ID.to_string (fst rule.R.id))
+      |> List.sort String.compare |> String.concat "\000"
+    in
+    Xlang.to_string analyzer ^ "\000" ^ rule_ids
+  in
   function
   | Lockfile ({ path; kind } as lockfile) ->
       (* TODO: (sca) we always pass None as the manifest target here, but this
@@ -935,13 +969,56 @@ let mk_target_handler (caps : < Cap.time_limit >) (config : Core_scan_config.t)
           | _, None ->
               empty_matches_single_file
           | _ :: _, Some ast ->
+              let cache_key = interfile_cache_key analyzer interfile_rules in
               let interfile_xconf =
                 { xconf with filter_irrelevant_rules = NoPrefiltering }
               in
-              let interfile_xtarget = Xtarget.resolve_with_ast (lazy ast) target in
-              Match_rules.check ~match_hook ~timeout ~dependency_match_table
-                interfile_xconf interfile_rules interfile_xtarget
-              |> keep_matches_in_file file
+              let interfile_taint_cache, precompute_matches =
+                Mutex.protect interfile_result_cache_mutex (fun () ->
+                    match Hashtbl.find_opt interfile_result_cache cache_key with
+                    | Some cached -> cached
+                    | None ->
+                        let interfile_xtarget =
+                          Xtarget.resolve_with_ast (lazy ast) target
+                        in
+                        let cached =
+                          Match_rules.check_taint_signatures ~match_hook
+                            ~timeout interfile_xconf interfile_rules
+                            interfile_xtarget
+                        in
+                        Hashtbl.add interfile_result_cache cache_key cached;
+                        cached)
+              in
+              let cached_rule_ids =
+                interfile_taint_cache.Match_tainting_mode.signature_dbs
+                |> List_.map fst
+              in
+              let rule_has_sink_in_file rule_id =
+                interfile_taint_cache.Match_tainting_mode.sink_files
+                |> List.exists (fun (cached_rule_id, files) ->
+                       Rule_ID.equal cached_rule_id rule_id
+                       && List.exists (Fpath.equal file) files)
+              in
+              let interfile_rules =
+                interfile_rules
+                |> List.filter (fun rule ->
+                       let rule_id = fst rule.R.id in
+                       List.exists
+                         (fun cached_rule_id ->
+                           Rule_ID.equal cached_rule_id rule_id)
+                         cached_rule_ids
+                       && rule_has_sink_in_file rule_id)
+              in
+              let file_interfile_matches =
+                if List_.null interfile_rules then empty_matches_single_file
+                else
+                  Match_rules.check ~match_hook ~timeout ~dependency_match_table
+                    ~interfile_taint_cache interfile_xconf interfile_rules
+                    xtarget
+              in
+              combine_match_results
+                (keep_matches_in_file file precompute_matches)
+                file_interfile_matches
         in
         combine_match_results regular_matches interfile_matches
       in
@@ -988,7 +1065,9 @@ let scan_exn (caps : < caps ; .. >) (config : Core_scan_config.t)
   (* !!Let's go!! *)
   log_scan_inputs config ~targets ~skipped ~valid_rules ~invalid_rules;
   let interfile_asts_by_analyzer =
-    build_interfile_asts_by_analyzer targets valid_rules
+    build_interfile_asts_by_analyzer
+      (caps :> < Cap.fork >)
+      config.ncores targets valid_rules
       ~force_interfile:config.taint_interfile
   in
   let prefilter_cache_opt =

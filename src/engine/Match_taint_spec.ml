@@ -353,8 +353,7 @@ let range_and_file_of_any any =
       let r = Range.range_of_token_locations tok1 tok2 in
       Some (r, tok1.pos.file)
 
-let range_of_any any =
-  range_and_file_of_any any |> Option.map fst
+let range_of_any any = range_and_file_of_any any |> Option.map fst
 
 let file_of_range_with_metavars (rwm : RM.t) : Fpath.t =
   let start_loc, _end_loc = rwm.origin.range_loc in
@@ -418,7 +417,9 @@ let any_is_in_propagators_matches_OSS rule matches any :
              let same_file =
                Fpath.equal any_file (file_of_range_with_metavars prop.rwm)
              in
-             let is_from = same_file && is_exact_match ~match_range:prop.from r in
+             let is_from =
+               same_file && is_exact_match ~match_range:prop.from r
+             in
              let is_to = same_file && is_exact_match ~match_range:prop.to_ r in
              let mk_match kind = mk_propagator_match rule prop var kind r in
              (if is_from then [ mk_match `From ] else [])
@@ -455,29 +456,36 @@ let mk_taint_spec_match_preds rule matches =
 let default_effect_handler _fun_name new_effects = new_effects
 
 let taint_config_of_rule ~per_file_formula_cache
-    ?(handle_effects = default_effect_handler) xconf lang file ast_and_errors
+    ?(handle_effects = default_effect_handler) ?(allow_missing_sources = false)
+    xconf lang file ast_and_errors
     ({ mode = `Taint spec; _ } as rule : R.taint_rule) =
-  match spec_matches_of_taint_rule ~per_file_formula_cache xconf !!file
-      ast_and_errors rule with
-  | { sinks = []; _ }, _
-  | { sources = []; _ }, _ -> None
+  match
+    spec_matches_of_taint_rule ~per_file_formula_cache xconf !!file
+      ast_and_errors rule
+  with
+  | { sinks = []; _ }, _ -> None
+  | { sources = []; _ }, _ when not allow_missing_sources -> None
   | spec_matches, expls ->
-      let xconf = Match_env.adjust_xconfig_with_rule_options xconf rule.options in
+      let xconf =
+        Match_env.adjust_xconfig_with_rule_options xconf rule.options
+      in
       let options = xconf.config in
       let preds = mk_taint_spec_match_preds rule spec_matches in
-      Some (Taint_rule_inst.
+      Some
+        ( Taint_rule_inst.
             {
-                lang;
-                file;
-                rule_id = fst rule.R.id;
-                options;
-                track_control =
+              lang;
+              file;
+              rule_id = fst rule.R.id;
+              options;
+              track_control =
                 spec.sources |> snd
-                |> List.exists (fun (src : R.taint_source) -> src.source_control);
-                preds;
-                handle_effects;
-                java_props_cache = Hashtbl.create 30;
+                |> List.exists (fun (src : R.taint_source) ->
+                       src.source_control);
+              preds;
+              handle_effects;
+              java_props_cache = Hashtbl.create 30;
             },
-            spec_matches,
-            expls)
+          spec_matches,
+          expls )
 [@@trace_trace]
