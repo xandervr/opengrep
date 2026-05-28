@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_typescript_provider_metadata_container
+    message: Taint should flow through TypeScript provider metadata containers
+    languages: [typescript]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

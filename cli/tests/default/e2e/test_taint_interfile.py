@@ -1185,6 +1185,34 @@ def test_interfile_taint_flows_through_provider_object_array_containers(
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_typescript_provider_metadata_containers(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_typescript_provider_metadata_container.yaml",
+        target_name="taint_interfile_typescript_provider_metadata_container",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = sorted(output["results"], key=lambda result: result["path"])
+
+    assert output["interfile_languages_used"] == ["TypeScript"]
+    assert len(results) == 3
+    assert all(
+        result["check_id"]
+        == "rules.taint_interfile_typescript_provider_metadata_container"
+        for result in results
+    )
+    assert [result["path"] for result in results] == [
+        "targets/taint_interfile_typescript_provider_metadata_container/bootstrap_options/app.ts",
+        "targets/taint_interfile_typescript_provider_metadata_container/create_module/app.ts",
+        "targets/taint_interfile_typescript_provider_metadata_container/decorator_module/app.ts",
+    ]
+    assert [result["start"]["line"] for result in results] == [11, 15, 18]
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_javascript_service_container_factories(
     run_semgrep_in_tmp: RunSemgrep,
 ):
