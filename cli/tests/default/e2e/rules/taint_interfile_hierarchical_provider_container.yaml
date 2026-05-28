@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_hierarchical_provider_container
+    message: Taint should flow through hierarchical JavaScript provider containers
+    languages: [js]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
