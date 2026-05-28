@@ -307,6 +307,16 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | G.EDynamic field_expr -> name_from_static_property_expr field_expr
     | _ -> None
   in
+  let method_name_matches names = function
+    | G.Id ((name, _), _) -> List.exists (String.equal name) names
+    | _ -> false
+  in
+  let is_object_property_get_method_name =
+    method_name_matches [ "get"; "resolve"; "lookup" ]
+  in
+  let is_object_property_set_method_name =
+    method_name_matches [ "set"; "register"; "bind" ]
+  in
   let rec object_property_path_from_base obj_expr field_name =
     match object_property_path_from_expr obj_expr with
     | Some (obj_name, field_path) -> Some (obj_name, field_path @ [ field_name ])
@@ -323,72 +333,64 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | Some field_name -> object_property_path_from_base obj_expr field_name
         | None -> None)
     | G.Call
-        ( { e =
-              G.DotAccess
-                ( obj_expr,
-                  _,
-                  G.FN (G.Id (("get", _), _) as _method_name) );
-            _ },
+        ( { e = G.DotAccess (obj_expr, _, G.FN method_name); _ },
           (_, [ G.Arg key_expr ], _) ) -> (
-        match name_from_static_property_expr key_expr with
-        | Some field_name -> object_property_path_from_base obj_expr field_name
-        | None -> None)
+        match
+          ( is_object_property_get_method_name method_name,
+            name_from_static_property_expr key_expr )
+        with
+        | true, Some field_name -> object_property_path_from_base obj_expr field_name
+        | _ -> None)
     | _ -> None
   in
   let object_property_set_call_from_expr expr =
     match expr.G.e with
     | G.Call
-        ( { e =
-              G.DotAccess
-                ( obj_expr,
-                  _,
-                  G.FN (G.Id (("set", _), _) as _method_name) );
-            _ },
+        ( { e = G.DotAccess (obj_expr, _, G.FN method_name); _ },
           (_, [ G.Arg key_expr; G.Arg value_expr ], _) ) -> (
-        match name_from_static_property_expr key_expr with
-        | Some field_name -> (
+        match
+          ( is_object_property_set_method_name method_name,
+            name_from_static_property_expr key_expr )
+        with
+        | true, Some field_name -> (
             match object_property_path_from_base obj_expr field_name with
             | Some (obj_name, field_path) -> Some (obj_name, field_path, value_expr)
             | None -> None)
-        | None -> None)
+        | _ -> None)
     | _ -> None
   in
   let rec object_property_set_chain_entries_from_expr expr =
     match expr.G.e with
     | G.Call
-        ( { e =
-              G.DotAccess
-                ( obj_expr,
-                  _,
-                  G.FN (G.Id (("set", _), _) as _method_name) );
-            _ },
+        ( { e = G.DotAccess (obj_expr, _, G.FN method_name); _ },
           (_, [ G.Arg key_expr; G.Arg value_expr ], _) ) -> (
         let previous_entries =
           object_property_set_chain_entries_from_expr obj_expr
         in
-        match name_from_static_property_expr key_expr with
-        | Some field_name -> previous_entries @ [ (field_name, value_expr) ]
-        | None -> previous_entries)
+        match
+          ( is_object_property_set_method_name method_name,
+            name_from_static_property_expr key_expr )
+        with
+        | true, Some field_name -> previous_entries @ [ (field_name, value_expr) ]
+        | _ -> previous_entries)
     | _ -> []
   in
   let value_expr_from_chained_object_property_get expr =
     match expr.G.e with
     | G.Call
-        ( { e =
-              G.DotAccess
-                ( obj_expr,
-                  _,
-                  G.FN (G.Id (("get", _), _) as _method_name) );
-            _ },
+        ( { e = G.DotAccess (obj_expr, _, G.FN method_name); _ },
           (_, [ G.Arg key_expr ], _) ) -> (
-        match name_from_static_property_expr key_expr with
-        | Some field_name ->
+        match
+          ( is_object_property_get_method_name method_name,
+            name_from_static_property_expr key_expr )
+        with
+        | true, Some field_name ->
             object_property_set_chain_entries_from_expr obj_expr
             |> List.rev
             |> List.find_opt (fun (mapped_field_name, _value_expr) ->
                    same_resolved_name field_name mapped_field_name)
             |> Option.map snd
-        | None -> None)
+        | _ -> None)
     | _ -> None
   in
   let class_name_from_object_mapping expr =
