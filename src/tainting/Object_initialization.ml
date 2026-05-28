@@ -653,16 +653,28 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     let injected_param_keys =
       Tok.unbracket fdef.G.fparams
       |> List.filter_map (function
-           | G.Param { G.pname = Some ((param_name, _)); pattrs; _ } -> (
+           | G.Param { G.pname = Some ((param_name, _)); pattrs; pinfo; _ } -> (
                match injected_key_from_attrs pattrs with
-               | Some injected_key -> Some (param_name, injected_key)
+               | Some injected_key -> Some (param_name, pinfo, injected_key)
                | None -> None)
            | _ -> None)
     in
     let param_index param_name = List.assoc_opt param_name param_indexes in
     let injected_param_key param_name =
-      List.assoc_opt param_name injected_param_keys
+      injected_param_keys
+      |> List.find_opt (fun (mapped_param_name, _pinfo, _injected_key) ->
+             String.equal mapped_param_name param_name)
+      |> Option.map (fun (_param_name, _pinfo, injected_key) -> injected_key)
     in
+    injected_param_keys
+    |> List.iter (fun (param_name, pinfo, injected_key) ->
+           match class_name_from_injected_provider_key injected_key with
+           | Some class_name ->
+               object_mappings :=
+                 (G.Id ((param_name, Tok.unsafe_fake_tok param_name), pinfo),
+                  class_name)
+                 :: !object_mappings
+           | None -> ());
     let visitor =
       object
         inherit [_] G.iter as super

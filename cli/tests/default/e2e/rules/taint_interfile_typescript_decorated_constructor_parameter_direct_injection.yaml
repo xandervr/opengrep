@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_typescript_decorated_constructor_parameter_direct_injection
+    message: Taint should flow through direct TypeScript decorated constructor parameter injection
+    languages: [typescript]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
