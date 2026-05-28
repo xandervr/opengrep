@@ -6,7 +6,7 @@
 
 **Architecture:** The current implementation builds per-file global taint environments and function signatures, resolves interfile calls through `Graph_from_AST`, and consumes signatures in `Dataflow_tainting`. Continue closing parity gaps by writing focused e2e regressions first, proving them red in Docker, then extending the existing naming/import/export/signature paths rather than adding a separate analyzer.
 
-**Tech Stack:** OCaml engine (`src/tainting`, `src/engine`, `src/analyzing`, `src/naming`), Python e2e harness (`cli/tests/default/e2e`), OpenGrep CLI/core binaries built with Docker and `make core`.
+**Tech Stack:** OCaml engine (`src/tainting`, `src/engine`, `src/analyzing`, `src/naming`), Python e2e harness (`cli/tests/default/e2e`), OpenGrep CLI/core binaries built locally with opam/`make core` on macOS and optionally in Docker for comparison.
 
 ---
 
@@ -19,7 +19,7 @@
 **Branch:** `codex/interfile-taint-mvp`
 
 **Hard constraints:**
-- Compile and verify through Docker only. The user explicitly rejected local compilation as the authoritative build path.
+- The Docker-only build requirement has been removed. The branch must build locally on the user's macOS machine with `opam exec -- make core`, and the resulting `bin/opengrep` should be runnable through the user's `~/.local/bin/opengrep` symlink.
 - Preserve support for every parser-backed target language in `cli/src/semgrep/semgrep_interfaces/lang.json`.
 - Do not claim full Semgrep Pro parity until the remaining audit covers the full objective. `generic` and `regex` are now explicitly classified as non-AST analyzers outside Semgrep Pro taint parity scope.
 
@@ -74,6 +74,9 @@
 - TypeScript forward provider aliases now resolve `useExisting: forwardRef(() => Token)` provider metadata through later token bindings, including direct, forward-ordered, and imported provider arrays.
 - TypeScript registry decorator metadata now resolves TSyringe-style `@registry([...])` provider arrays consumed by lowercase `@inject(...)` constructor parameters, covering `useClass`, `useFactory`, and `useValue` providers.
 - JavaScript provider spec registration coverage now includes object provider specs passed as `register("key", { useClass/useFactory/useValue: ... })`.
+- `opengrep scan --taint-interfile` is now a visible CLI flag. It forces taint-mode rules through the interfile taint path even when the rule omits `options: interfile: true`; rule-level `options.interfile: true` still works.
+- `opengrep scan --dataflow-traces` now makes human text output show the cross-file source path for interfile taint traces. JSON output already carries full source and sink paths in `extra.dataflow_trace`.
+- TypeScript delayed provider references now resolve `delay(() => Class)` anywhere the previous `forwardRef(() => Class)` helper was accepted, covering explicit `@inject(delay(...))`, provider token metadata, and both-side delayed token use.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
 - JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, dynamic-keyed, dynamic-template-keyed, chained map, container API, provider-binding, provider API alias, provider method alias, provider alias, and registration-map service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
 
@@ -171,6 +174,41 @@
 - `caabeef2b` - `fix: resolve typescript environment providers` (signed)
 - `41227c142` - `fix: resolve typescript forward provider aliases` (signed)
 - `22182d551` - `fix: resolve typescript registry provider metadata` (signed)
+- `0baaf5e5a` - `fix: expose interfile taint cli flag` (signed)
+
+**Current macOS build/use notes:**
+
+```bash
+opam exec -- make setup
+opam exec -- make core
+~/.local/bin/opengrep --version
+```
+
+The current machine has `~/.local/bin/opengrep` pointing at this checkout's `bin/opengrep`, while the previous release binary was preserved as `~/.local/bin/opengrep-release`.
+
+Use interfile taint in either of these ways:
+
+```yaml
+rules:
+  - id: my-interfile-taint-rule
+    mode: taint
+    options:
+      interfile: true
+```
+
+or from the CLI for taint-mode rules without rule-level `options.interfile`:
+
+```bash
+opengrep scan --taint-interfile --config rule.yaml path/to/project
+```
+
+Show source-to-sink flow in text output:
+
+```bash
+opengrep scan --dataflow-traces --config rule.yaml path/to/project
+```
+
+For JSON consumers, run with `--json`; each finding can include `extra.dataflow_trace` with full `taint_source`, `intermediate_vars`, and `taint_sink` locations.
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -198,7 +236,7 @@ The Docker-built help text now says:
 
 **Next concrete actions:**
 
-1. Re-run the Docker direct scan matrix from Task 4 after any further engine change.
+1. Re-run the local direct scan matrix after any further engine change; use Docker only as an optional parity check.
 2. Keep `git diff --check` and `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` green.
 3. Continue auditing remaining Semgrep Pro parity gaps beyond the covered import/value/export/object/trace/inheritance cases.
 4. Audit remaining class-field and dispatch gaps before making any broad class-field parity claim: deeper framework-specific object construction forms, language-specific class-field edge cases, and deeper callback/HOF language-specific forms.
@@ -1396,8 +1434,8 @@ Known boundaries:
 - PHP callback-body-sink syntax remains blocked by parser/AST lowering for anonymous and arrow functions: current dumps drop lambda parameters and sink call arguments, so the taint engine cannot follow the callback argument into `sink($value)`. PHP callback-return syntax remains covered.
 - Do not claim full Semgrep Pro parity until a requirement-by-requirement audit proves it.
 
-Docker-only instruction:
-- The user explicitly said to compile in Docker. Do not use local opam/dune builds as the authoritative build gate.
+Build instruction update:
+- The earlier Docker-only instruction is superseded. Local macOS builds with `opam exec -- make core` are now required so the user can run this checkout's `opengrep` directly; Docker can still be used as an optional comparison path.
 
 ---
 
@@ -3728,15 +3766,15 @@ rg -n "pytest .*test_taint_interfile|run_semgrep_in_tmp|kinda_slow" Makefile cli
 Current state:
 - The pytest wrapper uses `pipenv run pytest`.
 - `PYTEST_USE_OSEMGREP=true` disables Click runner and expects a real `opengrep`/`opengrep-core` executable.
-- This checkout has `bin -> _build/install/default/bin`, but there are no local `bin/opengrep` or `bin/opengrep-core` artifacts because compilation is intentionally Docker-only.
-- The authoritative executable is in the Docker `opengrep-src-build` volume, so the direct Docker scan matrix remains the current proof.
-- A narrow pytest run for `test_interfile_taint_rule_fixtures_cover_all_target_languages` did not reach the test body because `pipenv run` created an empty virtualenv and failed importing `colorama` from `cli/tests/conftest.py`; that empty virtualenv was removed with `pipenv --rm`.
+- This checkout now has local macOS `bin/opengrep` and `bin/opengrep-core` artifacts after `opam exec -- make core`.
+- Direct local scans with `bin/opengrep` are the current proof. Docker scans are optional comparison checks unless the user reintroduces Docker as the authoritative build path.
+- A narrow local pytest run did not reach the test body because the Python dev environment is missing `colorama` from `cli/tests/conftest.py`. Do not claim pytest coverage until `cd cli && pipenv install --dev` or an equivalent Python test environment is available.
 
-Do not claim pytest coverage until a Docker-compatible pytest invocation is wired up or the Docker-built artifacts are intentionally exposed to the pytest environment.
+Do not claim pytest coverage until the local Python test environment is installed.
 
 - [ ] **Step 2: Keep direct scans even if pytest passes**
 
-The direct scan matrix is still required because it verifies the built Docker binary directly and prints the result counts for every fixture.
+The direct scan matrix is still required because it verifies the built binary directly and prints the result counts for every fixture.
 
 ---
 
