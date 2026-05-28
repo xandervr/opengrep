@@ -207,6 +207,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let object_property_alias_mappings = ref [] in
   let injected_field_mappings = ref [] in
   let constructor_param_field_mappings = ref [] in
+  let provider_array_mappings = ref [] in
   let function_return_mappings = ref [] in
   let function_return_object_property_mappings = ref [] in
   let function_alias_mappings = ref [] in
@@ -1195,6 +1196,26 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           :: !object_property_mappings
     | None -> ()
   in
+  let provider_array_exprs_from_name provider_name =
+    !provider_array_mappings
+    |> List.find_opt (fun (mapped_name, _provider_exprs) ->
+           same_resolved_name provider_name mapped_name
+           || same_name provider_name mapped_name)
+    |> Option.map snd
+  in
+  let record_provider_array_mapping provider_name expr =
+    match expr.G.e with
+    | G.Container (G.Array, (_, provider_exprs, _))
+      when provider_exprs
+           |> List.exists (function
+                | { G.e = G.Record (_, fields, _); _ } ->
+                    Option.is_some
+                      (class_mapping_from_provider_object_fields fields)
+                | _ -> false) ->
+        provider_array_mappings :=
+          (provider_name, provider_exprs) :: !provider_array_mappings
+    | _ -> ()
+  in
   let rec record_provider_metadata_mapping expr =
     let record_provider_array_exprs provider_exprs =
       provider_exprs
@@ -1224,6 +1245,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                      G.Container (G.Array, (_, provider_exprs, _)) )
                    when method_name_matches [ "providers" ] field_name ->
                      record_provider_array_exprs provider_exprs
+                 | Some field_name, G.N provider_name
+                   when method_name_matches [ "providers" ] field_name -> (
+                     match provider_array_exprs_from_name provider_name with
+                     | Some provider_exprs ->
+                         record_provider_array_exprs provider_exprs
+                     | None -> ())
                  | _ -> ())
              | _ -> ())
     | G.Call (_callee_expr, (_, args, _)) ->
@@ -1691,6 +1718,21 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         super#visit_definition () def
     end
   in
+  let provider_array_visitor =
+    object
+      inherit [_] G.iter as super
+
+      method! visit_definition () def =
+        (match def with
+        | entity, G.VarDef { G.vinit = Some init_expr; _ } -> (
+            match entity.G.name with
+            | G.EN provider_name ->
+                record_provider_array_mapping provider_name init_expr
+            | _ -> ())
+        | _ -> ());
+        super#visit_definition () def
+    end
+  in
 
   let visitor =
     object
@@ -1724,6 +1766,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                     record_object_property_alias_mapping var_name init_expr;
                     record_object_container_alias_mapping var_name init_expr;
                     record_destructured_object_property_mappings init_expr;
+                    record_provider_array_mapping var_name init_expr;
                     record_function_alias_mapping var_name init_expr;
                     let class_name = class_name_from_expr init_expr in
                     let class_name =
@@ -1842,6 +1885,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                 record_object_property_alias_mapping var_name init_expr;
                 record_object_container_alias_mapping var_name init_expr;
                 record_destructured_object_property_mappings init_expr;
+                record_provider_array_mapping var_name init_expr;
                 record_function_alias_mapping var_name init_expr;
                 let class_name = class_name_from_expr init_expr in
                 match class_name with
@@ -1877,6 +1921,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
 
   string_constant_visitor#visit_program () ast;
   function_return_visitor#visit_program () ast;
+  provider_array_visitor#visit_program () ast;
   visitor#visit_program () ast;
   !object_mappings
 
