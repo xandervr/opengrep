@@ -353,6 +353,44 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | None -> None)
     | _ -> None
   in
+  let rec object_property_set_chain_entries_from_expr expr =
+    match expr.G.e with
+    | G.Call
+        ( { e =
+              G.DotAccess
+                ( obj_expr,
+                  _,
+                  G.FN (G.Id (("set", _), _) as _method_name) );
+            _ },
+          (_, [ G.Arg key_expr; G.Arg value_expr ], _) ) -> (
+        let previous_entries =
+          object_property_set_chain_entries_from_expr obj_expr
+        in
+        match name_from_static_property_expr key_expr with
+        | Some field_name -> previous_entries @ [ (field_name, value_expr) ]
+        | None -> previous_entries)
+    | _ -> []
+  in
+  let value_expr_from_chained_object_property_get expr =
+    match expr.G.e with
+    | G.Call
+        ( { e =
+              G.DotAccess
+                ( obj_expr,
+                  _,
+                  G.FN (G.Id (("get", _), _) as _method_name) );
+            _ },
+          (_, [ G.Arg key_expr ], _) ) -> (
+        match name_from_static_property_expr key_expr with
+        | Some field_name ->
+            object_property_set_chain_entries_from_expr obj_expr
+            |> List.rev
+            |> List.find_opt (fun (mapped_field_name, _value_expr) ->
+                   same_resolved_name field_name mapped_field_name)
+            |> Option.map snd
+        | None -> None)
+    | _ -> None
+  in
   let class_name_from_object_mapping expr =
     name_from_mapping object_mappings expr
   in
@@ -514,9 +552,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
             match class_name_from_object_property_mapping expr with
             | Some _ as class_name -> class_name
             | None -> (
-                match class_name_from_function_return expr with
-                | Some _ as class_name -> class_name
-                | None -> class_name_from_conditional_expr expr)))
+                match value_expr_from_chained_object_property_get expr with
+                | Some value_expr -> class_name_from_expr value_expr
+                | None -> (
+                    match class_name_from_function_return expr with
+                    | Some _ as class_name -> class_name
+                    | None -> class_name_from_conditional_expr expr))))
   and class_name_from_conditional_expr expr =
     match expr.G.e with
     | G.Conditional (_condition, then_expr, else_expr) -> (
@@ -766,6 +807,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         record_object_property_value_mapping obj_name field_path value_expr
     | None -> ()
   in
+  let record_object_property_set_chain_mapping obj_name init_expr =
+    object_property_set_chain_entries_from_expr init_expr
+    |> List.iter (fun (field_name, value_expr) ->
+           record_object_property_value_mapping obj_name [ field_name ]
+             value_expr)
+  in
   let record_object_property_alias_mapping alias_name init_expr =
     match object_property_path_from_expr init_expr with
     | Some (obj_name, field_path) ->
@@ -974,6 +1021,14 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                    (func_name, mapped_path, class_name)
                    :: !function_return_object_property_mappings)
       | G.Call (callee_expr, _) ->
+          object_property_set_chain_entries_from_expr return_expr
+          |> List.iter (fun (field_name, value_expr) ->
+                 match class_name_from_return_expr value_expr with
+                 | Some class_name ->
+                     function_return_object_property_mappings :=
+                       (func_name, [ field_name ], class_name)
+                       :: !function_return_object_property_mappings
+                 | None -> ());
           object_property_entries_from_return_call callee_expr
           |> List.iter (fun (mapped_path, class_name) ->
                  function_return_object_property_mappings :=
@@ -1017,7 +1072,15 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           |> List.iter (fun (mapped_path, class_name) ->
                  local_object_property_mappings :=
                    (var_name, mapped_path, class_name)
-                   :: !local_object_property_mappings)
+                   :: !local_object_property_mappings);
+          object_property_set_chain_entries_from_expr init_expr
+          |> List.iter (fun (field_name, value_expr) ->
+                 match class_name_from_return_expr value_expr with
+                 | Some class_name ->
+                     local_object_property_mappings :=
+                       (var_name, [ field_name ], class_name)
+                       :: !local_object_property_mappings
+                 | None -> ())
       | G.N local_name ->
           object_property_entries_from_local local_name
           |> List.iter (fun (mapped_path, class_name) ->
@@ -1139,6 +1202,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                 match (entity.G.name, var_def.G.vinit) with
                 | G.EN var_name, Some init_expr -> (
                     record_object_property_mappings var_name init_expr;
+                    record_object_property_set_chain_mapping var_name init_expr;
                     record_object_property_alias_mapping var_name init_expr;
                     record_destructured_object_property_mappings init_expr;
                     record_function_alias_mapping var_name init_expr;
@@ -1251,6 +1315,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
             match (entity.G.name, var_def.G.vinit) with
             | G.EN var_name, Some init_expr -> (
                 record_object_property_mappings var_name init_expr;
+                record_object_property_set_chain_mapping var_name init_expr;
                 record_object_property_alias_mapping var_name init_expr;
                 record_destructured_object_property_mappings init_expr;
                 record_function_alias_mapping var_name init_expr;
