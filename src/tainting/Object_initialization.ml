@@ -265,19 +265,36 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     List.length path1 = List.length path2
     && List.for_all2 same_resolved_name path1 path2
   in
-  let name_from_string_literal_expr expr =
+  let name_from_static_string_value value =
+    G.Id ((value, Tok.unsafe_fake_tok value), G.empty_id_info ())
+  in
+  let rec name_from_static_string_expr expr =
     match expr.G.e with
     | G.L (G.String (_, (field_name, tok), _)) ->
         Some (G.Id ((field_name, tok), G.empty_id_info ()))
+    | G.N key_name -> name_from_name_mapping string_constant_mappings key_name
+    | G.Call ({ e = G.IdSpecial (G.Op G.Plus, _); _ }, (_, args, _)) ->
+        let rec string_parts = function
+          | [] -> Some []
+          | G.Arg arg_expr :: rest -> (
+              match
+                ( name_from_static_string_expr arg_expr,
+                  string_parts rest )
+              with
+              | Some name, Some parts -> (
+                  match string_of_name name with
+                  | Some part -> Some (part :: parts)
+                  | None -> None)
+              | _ -> None)
+          | _ -> None
+        in
+        (match string_parts args with
+        | Some parts -> Some (name_from_static_string_value (String.concat "" parts))
+        | None -> None)
     | _ -> None
   in
   let name_from_static_property_expr expr =
-    match name_from_string_literal_expr expr with
-    | Some _ as field_name -> field_name
-    | None -> (
-        match expr.G.e with
-        | G.N key_name -> name_from_name_mapping string_constant_mappings key_name
-        | _ -> None)
+    name_from_static_string_expr expr
   in
   let field_name_from_entity entity =
     match entity.G.name with
@@ -1020,7 +1037,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     end
   in
   let record_string_constant_mapping var_name init_expr =
-    match name_from_string_literal_expr init_expr with
+    match name_from_static_string_expr init_expr with
     | Some field_name ->
         string_constant_mappings :=
           (var_name, field_name) :: !string_constant_mappings

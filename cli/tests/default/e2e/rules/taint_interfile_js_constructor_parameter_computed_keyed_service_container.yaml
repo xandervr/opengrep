@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_js_constructor_parameter_computed_keyed_service_container
+    message: Taint should flow through JavaScript computed-keyed service containers
+    languages: [js]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
