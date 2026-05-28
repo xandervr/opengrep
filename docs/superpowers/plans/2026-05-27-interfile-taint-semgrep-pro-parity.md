@@ -71,6 +71,7 @@
 - TypeScript named provider factory dependency metadata now resolves `useFactory: makeSource` and `useFactory: selectSource` entries when the named function or const lambda returns one of its injected parameters.
 - TypeScript optional/location DI metadata decorators now trigger typed constructor metadata for `@Optional()`, `@Self()`, `@SkipSelf()`, and `@Host()` without requiring an explicit `@Inject()` key or class-level `@Injectable()` decorator.
 - TypeScript environment provider metadata now resolves provider arrays wrapped by `makeEnvironmentProviders(...)`, including direct, named, and imported wrapper values.
+- TypeScript forward provider aliases now resolve `useExisting: forwardRef(() => Token)` provider metadata through later token bindings, including direct, forward-ordered, and imported provider arrays.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
 - JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, dynamic-keyed, dynamic-template-keyed, chained map, container API, provider-binding, provider API alias, provider method alias, provider alias, and registration-map service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
 
@@ -166,6 +167,7 @@
 - `5ea01253b` - `fix: resolve typescript named provider factory deps` (signed)
 - `38c821cc7` - `fix: resolve typescript optional metadata injection` (signed)
 - `caabeef2b` - `fix: resolve typescript environment providers` (signed)
+- `41227c142` - `fix: resolve typescript forward provider aliases` (signed)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -189,7 +191,7 @@ The Docker-built help text now says:
     not support taint mode.
 ```
 
-**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, DI-class constructor type metadata, async `getAsync`/`resolveAsync` provider reads, parent-to-child container aliases, provider lifecycle-chain wrappers, provider-object registration arrays, direct `providers: [...]` metadata, provider-list aliases, class-token provider metadata, provider-list spreads, nested provider arrays, provider class shorthand entries, JavaScript provider tuple arrays, two-argument provider spec registrations, TypeScript `forwardRef(() => Class)` wrappers, Inversify-style `toSelf()` providers, TypeScript provider factory dependency metadata, named TypeScript provider factory dependency metadata, TypeScript optional/location metadata decorators, or TypeScript environment-provider wrappers. Good next targets are additional library-specific provider APIs and tuple-like TypeScript metadata forms that appear in real frameworks. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
+**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, DI-class constructor type metadata, async `getAsync`/`resolveAsync` provider reads, parent-to-child container aliases, provider lifecycle-chain wrappers, provider-object registration arrays, direct `providers: [...]` metadata, provider-list aliases, class-token provider metadata, provider-list spreads, nested provider arrays, provider class shorthand entries, JavaScript provider tuple arrays, two-argument provider spec registrations, TypeScript `forwardRef(() => Class)` wrappers, Inversify-style `toSelf()` providers, TypeScript provider factory dependency metadata, named TypeScript provider factory dependency metadata, TypeScript optional/location metadata decorators, TypeScript environment-provider wrappers, or TypeScript forward provider aliases. Good next targets are additional library-specific provider APIs and tuple-like TypeScript metadata forms that appear in real frameworks. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
 
 **Next concrete actions:**
 
@@ -1165,6 +1167,39 @@ printf "regex_taint results=%s errors=%s\n" "$(jq -r ".results|length" /tmp/open
 jq -r ".errors[]?.message // .errors[]? // empty" /tmp/opengrep-generic-regex/regex.json
 '
 ```
+
+## Latest Session Update: TypeScript Forward Provider Aliases Green
+
+TypeScript provider metadata now resolves forward aliases that use `forwardRef` in `useExisting` provider objects.
+
+- `src/tainting/Object_initialization.ml` reuses the same provider-key extraction for `useExisting`, `toService`, and `aliasTo` that already handles static strings, class tokens, and `forwardRef(() => Token)` provider keys.
+- Provider metadata arrays are recorded once per entry so aliases can be revisited after later provider entries establish the target token binding.
+- `cli/tests/default/e2e/rules/taint_interfile_typescript_provider_forward_alias_metadata.yaml` and `targets/taint_interfile_typescript_provider_forward_alias_metadata/` lock direct class-token aliases, alias-before-target ordering, and imported provider arrays.
+
+Red proof before the fix:
+
+```text
+provider_forward_alias_red count=0 expected=3 errors=0 interfile_languages="TypeScript"
+```
+
+Current targeted scan:
+
+```text
+provider_forward_alias_green count=3 expected=3 errors=0 interfile_languages="TypeScript"
+rules.taint_interfile_typescript_provider_forward_alias_metadata    targets/taint_interfile_typescript_provider_forward_alias_metadata/class_token_alias/app.ts    29
+rules.taint_interfile_typescript_provider_forward_alias_metadata    targets/taint_interfile_typescript_provider_forward_alias_metadata/direct_alias/app.ts    29
+rules.taint_interfile_typescript_provider_forward_alias_metadata    targets/taint_interfile_typescript_provider_forward_alias_metadata/imported_alias/app.ts    11
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes.
+- Full direct regression matrix passes with `matrix_failures=0`, including `taint_interfile_typescript_provider_forward_alias_metadata count=3`, `taint_interfile_typescript_provider_environment_metadata count=3`, `taint_interfile_typescript_optional_metadata_injection count=3`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
+- `git diff --check` passes.
+- Docker `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+- Signed checkpoint pushed: `41227c142` - `fix: resolve typescript forward provider aliases`.
+
+Next resume point: continue auditing additional library-specific provider APIs and tuple-like TypeScript metadata forms that appear in real frameworks.
 
 ## Latest Session Update: TypeScript Environment Providers Green
 
