@@ -57,6 +57,7 @@
 - JavaScript hierarchical provider containers now resolve parent bindings through child/scope containers created by `createChild()`, `createChildContainer()`, and `createScope()`.
 - JavaScript provider lifecycle/scoping chains now resolve provider bindings wrapped by methods such as `inSingletonScope()`, `singleton()`, and lifecycle modifiers on registration-map provider specs.
 - JavaScript provider-object arrays now resolve registration entries like `{ provide: "source", useClass: Source }`, `{ token: "source", useValue: new Source() }`, and `{ name: "source", useFactory: () => new Source() }`.
+- TypeScript provider metadata containers now resolve `providers: [...]` arrays in decorator metadata and bootstrap/module call metadata, covering object providers that bind untyped `@Inject("source")` constructor parameters through `useClass`, `useFactory`, and `useValue`.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
 - JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, dynamic-keyed, dynamic-template-keyed, chained map, container API, provider-binding, provider API alias, provider method alias, provider alias, and registration-map service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
 
@@ -138,6 +139,7 @@
 - `8ec8add26` - `fix: resolve hierarchical provider containers` (signed)
 - `a9ebe2a89` - `fix: resolve provider lifecycle containers` (signed)
 - `b6c2dacf3` - `fix: resolve provider object arrays` (signed)
+- `b41652c71` - `fix: resolve provider metadata containers` (signed)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -161,7 +163,7 @@ The Docker-built help text now says:
     not support taint mode.
 ```
 
-**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, DI-class constructor type metadata, async `getAsync`/`resolveAsync` provider reads, parent-to-child container aliases, provider lifecycle-chain wrappers, or provider-object registration arrays, such as metadata without statically visible class types and additional library-specific provider APIs. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
+**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, DI-class constructor type metadata, async `getAsync`/`resolveAsync` provider reads, parent-to-child container aliases, provider lifecycle-chain wrappers, provider-object registration arrays, or direct `providers: [...]` metadata. Good next targets are metadata stored in variables/imported constants before being passed to decorators/bootstrap calls, class-token provider keys such as `{ provide: Source, useClass: SourceImpl }`, and additional library-specific provider APIs. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
 
 **Next concrete actions:**
 
@@ -288,6 +290,41 @@ taint_interfile_hierarchical_provider_container count=3 expected=3 errors=0 inte
 taint_interfile_async_provider_container count=3 expected=3 errors=0 interfile_lang_count=2 status=0
 taint_interfile_js_constructor_parameter_registration_map_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
 taint_interfile_js_constructor_parameter_provider_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_language_matrix count=28 expected=28 errors=0 interfile_lang_count=28 status=0
+taint_interfile_parser_smoke count=13 expected=13 errors=0 interfile_lang_count=13 status=0
+matrix_failures=0
+```
+
+Latest provider-metadata red proof before `b41652c71`:
+
+```text
+provider_metadata_red count=0 expected=3 errors=0 interfile_lang_count=1
+```
+
+Latest provider-metadata green proof after `b41652c71`:
+
+```text
+provider_metadata_green count=3 expected=3 errors=0 interfile_lang_count=1
+rules.taint_interfile_typescript_provider_metadata_container    targets/taint_interfile_typescript_provider_metadata_container/bootstrap_options/app.ts    11
+rules.taint_interfile_typescript_provider_metadata_container    targets/taint_interfile_typescript_provider_metadata_container/create_module/app.ts    15
+rules.taint_interfile_typescript_provider_metadata_container    targets/taint_interfile_typescript_provider_metadata_container/decorator_module/app.ts    18
+```
+
+Latest broad Docker direct scan matrix after `b41652c71`:
+
+```text
+taint_interfile_typescript_provider_metadata_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_provider_object_array_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_provider_lifecycle_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_hierarchical_provider_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_async_provider_container count=3 expected=3 errors=0 interfile_lang_count=2 status=0
+taint_interfile_js_constructor_parameter_registration_map_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_js_constructor_parameter_provider_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_js_constructor_parameter_provider_api_alias_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_js_constructor_parameter_provider_method_alias_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_js_constructor_parameter_provider_alias_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_typescript_decorated_metadata_injection count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_typescript_injectable_constructor_metadata count=2 expected=2 errors=0 interfile_lang_count=1 status=0
 taint_interfile_language_matrix count=28 expected=28 errors=0 interfile_lang_count=28 status=0
 taint_interfile_parser_smoke count=13 expected=13 errors=0 interfile_lang_count=13 status=0
 matrix_failures=0
