@@ -46,8 +46,9 @@
 - TypeScript decorated property injection now resolves when a static provider binding such as `container.bind("source").to(Source)` is consumed through an untyped `@Inject("source")` class field.
 - TypeScript decorated constructor-parameter injection now resolves when `constructor(@Inject("source") source) { this.source = source }` consumes a static provider binding.
 - TypeScript decorated constructor-parameter direct injection now resolves when `constructor(@Inject("source") source) { sink(source.getInput()) }` consumes a static provider binding without assigning the parameter to a field.
+- JavaScript dynamic service-container keys now resolve when the same unknown key variable is used for both provider write and consumer read, covering bracket assignment, `Map`-style `set`/`get`, and provider `bind(...).to(...)` plus `get(...)`.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
-- JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, chained map, container API, provider-binding, and provider API alias service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
+- JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, dynamic-keyed, chained map, container API, provider-binding, and provider API alias service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -116,6 +117,7 @@
 - `8191e9b4b794fe33b7952199c73aa592f96db5ab` - `fix: resolve typescript decorated property injection` (unsigned for the same local signing issue)
 - `aec95cbff3c1b8925aedcef1a267874cf80c098f` - `fix: resolve typescript decorated constructor injection` (unsigned for the same local signing issue)
 - `46daf9d1d6bc012747ec876b2e91a3c793cb71ca` - `fix: resolve direct typescript decorated constructor injection` (unsigned for the same local signing issue)
+- `389e5bcde` - `fix: resolve javascript dynamic service container keys` (unsigned for the same local signing issue)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -297,7 +299,7 @@ python count=1 errors=0 interfile_lang_count=1
 js count=1 errors=0 interfile_lang_count=1
 ```
 
-Latest broad Docker direct scan matrix after `46daf9d1`:
+Latest broad Docker direct scan matrix after `389e5bcde`:
 
 ```text
 taint_interfile_js count=1 expected=1 errors=0 interfile_lang_count=1
@@ -320,6 +322,7 @@ taint_interfile_js_constructor_parameter_constant_keyed_service_container count=
 taint_interfile_js_constructor_parameter_computed_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_map_service_container count=3 expected=3 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_template_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=1
+taint_interfile_js_constructor_parameter_dynamic_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_chained_map_service_container count=3 expected=3 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_container_api_service_container count=3 expected=3 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_provider_container count=3 expected=3 errors=0 interfile_lang_count=1
@@ -1128,9 +1131,47 @@ Current verification after the fix:
 - `git diff --check` passes.
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
-Boundary note: direct constructor-argument object shapes, simple local helper aliases, simple alias reassignments, simple factory-returned constructor helpers, factory-local helper aliases, variable-assigned arrow factories, simple higher-order factories, callable factory variable aliases, service-container object properties, static string-keyed, constant-keyed, simple computed-keyed, simple map-like, simple template-keyed, simple chained-map, explicit container API, provider-binding, provider API alias service-container object properties, TypeScript decorated property injection, TypeScript decorated constructor-parameter field injection, and TypeScript decorated constructor-parameter direct injection through static provider bindings, service-container factory returns, service-container factory aliases, direct destructuring from service-container factory returns, simple composed service-container factory returns, destructured service-container properties, nested service-container property paths, mutated service-container property assignments, object-spread service containers, object-rest service containers, nested mutated service-container aliases, object factory properties, inline object factory properties, object factory property aliases, mutated object factory property aliases, and same-class conditional branch aliases are covered. Broader dependency-injection forms remain unaudited, including dynamic template expressions, dynamic container keys, and additional library-specific provider APIs.
+Boundary note: direct constructor-argument object shapes, simple local helper aliases, simple alias reassignments, simple factory-returned constructor helpers, factory-local helper aliases, variable-assigned arrow factories, simple higher-order factories, callable factory variable aliases, service-container object properties, static string-keyed, constant-keyed, simple computed-keyed, simple map-like, simple template-keyed, same-variable dynamic-keyed, simple chained-map, explicit container API, provider-binding, provider API alias service-container object properties, TypeScript decorated property injection, TypeScript decorated constructor-parameter field injection, and TypeScript decorated constructor-parameter direct injection through static provider bindings, service-container factory returns, service-container factory aliases, direct destructuring from service-container factory returns, simple composed service-container factory returns, destructured service-container properties, nested service-container property paths, mutated service-container property assignments, object-spread service containers, object-rest service containers, nested mutated service-container aliases, object factory properties, inline object factory properties, object factory property aliases, mutated object factory property aliases, and same-class conditional branch aliases are covered. Broader dependency-injection forms remain unaudited, including dynamic template expressions, structurally equivalent dynamic key expressions that do not share the same variable, and additional library-specific provider APIs.
 
-Next resume point: continue auditing broader dependency-injection object-shape forms, especially dynamic template expressions, dynamic container keys, and additional library-specific provider APIs.
+Next resume point: continue auditing broader dependency-injection object-shape forms, especially dynamic template expressions, dynamic expression-key equivalence, and additional library-specific provider APIs.
+
+---
+
+## Latest Session Update: JavaScript Dynamic Service-Container Keys Green
+
+JavaScript service-container object mappings now preserve key identity when an unknown key variable is reused on both the provider write and consumer read sides. This covers dynamic keys without evaluating their runtime string value.
+
+- `src/tainting/Object_initialization.ml` now falls back from static string-key extraction to a prefixed dynamic key identity for `G.N` key expressions.
+- The dynamic key identity is distinct from real string literals, so a variable named `source` does not collide with a literal `"source"`.
+- `cli/tests/default/e2e/rules/taint_interfile_js_constructor_parameter_dynamic_keyed_service_container.yaml` and `targets/taint_interfile_js_constructor_parameter_dynamic_keyed_service_container/` lock bracket assignment, `Map`-style `set`/`get`, and provider `bind(...).to(...)` plus `get(...)`.
+
+Red proof before the fix:
+
+```text
+taint_interfile_js_constructor_parameter_dynamic_keyed_service_container count=0 expected=3 errors=0 interfile_lang_count=1
+```
+
+Green proof after dynamic key identity fallback:
+
+```text
+taint_interfile_js_constructor_parameter_dynamic_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=1
+rules.taint_interfile_js_constructor_parameter_dynamic_keyed_service_container    targets/taint_interfile_js_constructor_parameter_dynamic_keyed_service_container/assignment/app.js    9
+rules.taint_interfile_js_constructor_parameter_dynamic_keyed_service_container    targets/taint_interfile_js_constructor_parameter_dynamic_keyed_service_container/map/app.js    9
+rules.taint_interfile_js_constructor_parameter_dynamic_keyed_service_container    targets/taint_interfile_js_constructor_parameter_dynamic_keyed_service_container/provider/app.js    9
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes from the current working tree.
+- Focused dynamic-key direct scan passes with `taint_interfile_js_constructor_parameter_dynamic_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=1`.
+- Adjacent focused scans pass for computed-keyed, template-keyed, provider, and explicit container API service containers.
+- Full direct regression matrix passes with `matrix_failures=0`, including `taint_interfile_js_constructor_parameter_dynamic_keyed_service_container count=3`, `taint_interfile_js_constructor_parameter_computed_keyed_service_container count=3`, `taint_interfile_js_constructor_parameter_template_keyed_service_container count=3`, `taint_interfile_js_constructor_parameter_provider_container count=3`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+
+Boundary note: same-variable dynamic keys are covered for object bracket access, map-like `set`/`get`, and provider binding APIs. The engine still does not evaluate runtime key values and does not yet prove equivalence for separately written dynamic expressions such as two matching non-static template literals.
+
+Next resume point: continue auditing broader dependency-injection object-shape forms, especially dynamic template expressions, dynamic expression-key equivalence, and additional library-specific provider APIs.
 
 ---
 
