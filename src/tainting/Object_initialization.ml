@@ -602,6 +602,21 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
            same_resolved_path [ field_name ] mapped_path)
     |> Option.map (fun (_mapped_obj, _mapped_path, class_name) -> class_name)
   in
+  let class_name_from_provider_key_or_self class_name =
+    match class_name_from_injected_provider_key class_name with
+    | Some provider_class_name -> provider_class_name
+    | None
+      when is_known_class class_name class_names -> (
+        !object_property_mappings
+        |> List.find_opt (fun (_mapped_obj, mapped_path, _class_name) ->
+               match mapped_path with
+               | [ mapped_name ] -> same_name class_name mapped_name
+               | _ -> false)
+        |> Option.map (fun (_mapped_obj, _mapped_path, provider_class_name) ->
+               provider_class_name)
+        |> Option.value ~default:class_name)
+    | None -> class_name
+  in
   let normalized_injected_field_name field_name =
     match string_of_name field_name with
     | Some field_name -> name_from_static_string_value field_name
@@ -808,7 +823,11 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                   || use_typed_constructor_metadata)
                   && Option.is_none (injected_key_from_attrs pattrs) -> (
                match class_name_from_type param_type with
-               | Some class_name -> Some (param_name, pinfo, class_name)
+               | Some class_name ->
+                   Some
+                     ( param_name,
+                       pinfo,
+                       class_name_from_provider_key_or_self class_name )
                | None -> None)
            | _ -> None)
     in
@@ -1177,24 +1196,47 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | _ -> None)
     | _ -> None
   in
+  let class_mappings_from_provider_object_fields fields =
+    match
+      ( field_init_named [ "provide"; "token"; "name" ] fields,
+        provider_field_entry fields )
+    with
+    | Some key_expr, Some (provider_method_name, provider_expr) -> (
+        match class_name_from_provider_expr provider_method_name provider_expr with
+        | Some class_name ->
+            let key_names =
+              match name_from_property_key_expr key_expr with
+              | Some key_name -> [ key_name ]
+              | None -> []
+            in
+            let key_names =
+              match key_expr.G.e with
+              | G.N class_token when is_known_class class_token class_names ->
+                  if List.exists (same_name class_token) key_names then key_names
+                  else class_token :: key_names
+              | _ -> key_names
+            in
+            key_names |> List.map (fun key_name -> (key_name, class_name))
+        | None -> [])
+    | _ -> []
+  in
   let record_provider_object obj_expr fields =
-    match class_mapping_from_provider_object_fields fields with
-    | Some (field_name, class_name) -> (
-        match object_property_path_from_base obj_expr field_name with
-        | Some (obj_name, field_path) ->
-            record_object_property_class_mapping obj_name field_path class_name
-        | None -> ())
-    | None -> ()
+    class_mappings_from_provider_object_fields fields
+    |> List.iter (fun (field_name, class_name) ->
+           match object_property_path_from_base obj_expr field_name with
+           | Some (obj_name, field_path) ->
+               record_object_property_class_mapping obj_name field_path
+                 class_name
+           | None -> ())
   in
   let record_provider_metadata_object fields =
-    match class_mapping_from_provider_object_fields fields with
-    | Some (field_name, class_name) ->
-        object_property_mappings :=
-          ( name_from_static_string_value "__opengrep_provider_metadata",
-            [ field_name ],
-            class_name )
-          :: !object_property_mappings
-    | None -> ()
+    class_mappings_from_provider_object_fields fields
+    |> List.iter (fun (field_name, class_name) ->
+           object_property_mappings :=
+             ( name_from_static_string_value "__opengrep_provider_metadata",
+               [ field_name ],
+               class_name )
+             :: !object_property_mappings)
   in
   let provider_array_exprs_from_name provider_name =
     !provider_array_mappings
@@ -1321,7 +1363,8 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | Some field_type -> (
             match class_name_from_type field_type with
             | Some class_name ->
-                record_injected_metadata_class_mapping field_name class_name
+                record_injected_metadata_class_mapping field_name
+                  (class_name_from_provider_key_or_self class_name)
             | None -> ())
         | None -> ())
     | _ -> ()
