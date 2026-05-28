@@ -391,10 +391,22 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let is_inject_attribute_name =
     method_name_matches [ "Inject"; "Autowired" ]
   in
+  let is_injectable_attribute_name =
+    method_name_matches
+      [ "Injectable"; "Component"; "Controller"; "Service"; "Directive";
+        "Resolver" ]
+  in
   let has_inject_attribute attrs =
     attrs
     |> List.exists (function
          | G.NamedAttr (_, attr_name, _) -> is_inject_attribute_name attr_name
+         | _ -> false)
+  in
+  let has_injectable_attribute attrs =
+    attrs
+    |> List.exists (function
+         | G.NamedAttr (_, attr_name, _) ->
+             is_injectable_attribute_name attr_name
          | _ -> false)
   in
   let injected_key_from_attrs attrs =
@@ -712,7 +724,10 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | _ -> None)
     | _ -> None
   in
-  let record_constructor_param_field_mappings class_name fdef =
+  let record_constructor_param_field_mappings class_name class_attrs fdef =
+    let use_typed_constructor_metadata =
+      has_injectable_attribute class_attrs
+    in
     let param_indexes =
       Tok.unbracket fdef.G.fparams
       |> List.mapi (fun index -> function
@@ -741,7 +756,8 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                  pinfo;
                  _;
                }
-             when has_inject_attribute pattrs
+             when (has_inject_attribute pattrs
+                  || use_typed_constructor_metadata)
                   && Option.is_none (injected_key_from_attrs pattrs) -> (
                match class_name_from_type param_type with
                | Some class_name -> Some (param_name, pinfo, class_name)
@@ -812,7 +828,8 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     in
     visitor#visit_function_definition () fdef
   in
-  let record_class_constructor_param_field_mappings class_name class_def =
+  let record_class_constructor_param_field_mappings class_name class_attrs
+      class_def =
     let class_name_str = string_of_name class_name in
     match class_name_str with
     | None -> ()
@@ -823,7 +840,8 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                  match entity.G.name with
                  | G.EN (G.Id ((func_name, _), _))
                    when is_constructor_name func_name class_name_str ->
-                     record_constructor_param_field_mappings class_name_str fdef
+                     record_constructor_param_field_mappings class_name_str
+                       class_attrs fdef
                  | _ -> ())
              | _ -> ())
   in
@@ -1616,7 +1634,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
             match entity.G.name with
             | G.EN class_name ->
                 record_class_constructor_param_field_mappings class_name
-                  class_def
+                  entity.G.attrs class_def
             | _ -> ())
         | entity, G.VarDef var_def -> (
             match (entity.G.name, var_def.G.vinit) with
