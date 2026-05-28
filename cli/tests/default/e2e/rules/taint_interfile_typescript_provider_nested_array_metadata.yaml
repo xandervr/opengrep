@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_typescript_provider_nested_array_metadata
+    message: Taint should flow through nested TypeScript provider arrays
+    languages: [typescript]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

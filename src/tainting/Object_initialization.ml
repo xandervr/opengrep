@@ -1245,15 +1245,19 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
            || same_name provider_name mapped_name)
     |> Option.map snd
   in
+  let rec provider_array_exprs_have_provider_object provider_exprs =
+    provider_exprs
+    |> List.exists (function
+         | { G.e = G.Record (_, fields, _); _ } ->
+             Option.is_some (class_mapping_from_provider_object_fields fields)
+         | { G.e = G.Container (G.Array, (_, nested_provider_exprs, _)); _ } ->
+             provider_array_exprs_have_provider_object nested_provider_exprs
+         | _ -> false)
+  in
   let record_provider_array_mapping provider_name expr =
     match expr.G.e with
     | G.Container (G.Array, (_, provider_exprs, _))
-      when provider_exprs
-           |> List.exists (function
-                | { G.e = G.Record (_, fields, _); _ } ->
-                    Option.is_some
-                      (class_mapping_from_provider_object_fields fields)
-                | _ -> false) ->
+      when provider_array_exprs_have_provider_object provider_exprs ->
         provider_array_mappings :=
           (provider_name, provider_exprs) :: !provider_array_mappings
     | _ -> ()
@@ -1264,6 +1268,9 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
       |> List.iter (function
            | { G.e = G.Record (_, fields, _); _ } ->
                record_provider_metadata_object fields
+           | { G.e = G.Container (G.Array, (_, nested_provider_exprs, _)); _ }
+             ->
+               record_provider_array_exprs nested_provider_exprs
            | {
                G.e =
                  G.Call
