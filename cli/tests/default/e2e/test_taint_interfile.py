@@ -1359,6 +1359,32 @@ def test_interfile_taint_flows_through_typescript_parameter_properties(
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_typescript_decorated_property_injection(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_typescript_decorated_property_injection.yaml",
+        target_name="taint_interfile_typescript_decorated_property_injection",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = output["results"]
+
+    assert output["interfile_languages_used"] == ["TypeScript"]
+    assert len(results) == 1
+    assert (
+        results[0]["check_id"]
+        == "rules.taint_interfile_typescript_decorated_property_injection"
+    )
+    assert (
+        results[0]["path"]
+        == "targets/taint_interfile_typescript_decorated_property_injection/app.ts"
+    )
+    assert results[0]["start"]["line"] == 20
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_applies_imported_javascript_sanitizers(
     run_semgrep_in_tmp: RunSemgrep,
 ):

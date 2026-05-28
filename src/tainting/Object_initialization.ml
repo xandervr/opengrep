@@ -327,6 +327,9 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
       [ "to"; "toConstantValue"; "toDynamicValue"; "useClass"; "useValue";
         "useFactory" ]
   in
+  let is_inject_attribute_name =
+    method_name_matches [ "Inject"; "Autowired" ]
+  in
   let rec object_property_path_from_base obj_expr field_name =
     match object_property_path_from_expr obj_expr with
     | Some (obj_name, field_path) -> Some (obj_name, field_path @ [ field_name ])
@@ -868,6 +871,31 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | None -> ())
     | None -> ()
   in
+  let class_name_from_injected_property_key field_name =
+    !object_property_mappings
+    |> List.find_opt (fun (_mapped_obj, mapped_path, _class_name) ->
+           same_resolved_path [ field_name ] mapped_path)
+    |> Option.map (fun (_mapped_obj, _mapped_path, class_name) -> class_name)
+  in
+  let injected_property_key_from_attrs attrs =
+    attrs
+    |> List.find_map (function
+         | G.NamedAttr (_, attr_name, attr_args)
+           when is_inject_attribute_name attr_name -> (
+             match Tok.unbracket attr_args with
+             | [ G.Arg key_expr ] -> name_from_static_property_expr key_expr
+             | _ -> None)
+         | _ -> None)
+  in
+  let record_injected_property_mapping entity =
+    match (entity.G.name, injected_property_key_from_attrs entity.G.attrs) with
+    | G.EN field_name, Some injected_key -> (
+        match class_name_from_injected_property_key injected_key with
+        | Some class_name ->
+            object_mappings := (field_name, class_name) :: !object_mappings
+        | None -> ())
+    | _ -> ()
+  in
   let record_object_property_assignment_mapping lval_expr rval_expr =
     match object_property_path_from_expr lval_expr with
     | Some (obj_name, field_path) ->
@@ -1274,6 +1302,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
             | G.VarDef var_def -> (
                 match (entity.G.name, var_def.G.vinit) with
                 | G.EN var_name, Some init_expr -> (
+                    record_injected_property_mapping entity;
                     record_object_property_mappings var_name init_expr;
                     record_object_property_set_chain_mapping var_name init_expr;
                     record_object_property_provider_mapping init_expr;
@@ -1399,6 +1428,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                 | Some cls ->
                     object_mappings := (var_name, cls) :: !object_mappings
                 | _ -> ())
+            | G.EN _, None -> record_injected_property_mapping entity
             | _ -> ())
         | _, G.FuncDef fdef ->
             Tok.unbracket fdef.G.fparams
