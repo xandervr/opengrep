@@ -587,17 +587,52 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | _ -> ()
   in
   let record_object_property_assignment_mapping lval_expr rval_expr =
-    match (object_property_path_from_expr lval_expr, class_name_from_expr rval_expr) with
-    | Some (obj_name, field_path), Some class_name ->
-        object_property_mappings :=
-          (obj_name, field_path, class_name) :: !object_property_mappings;
+    let record_for_alias add_mapping obj_name field_path value =
         (match object_property_path_from_alias obj_name with
         | Some (root_obj_name, root_field_path) ->
-            object_property_mappings :=
-              (root_obj_name, root_field_path @ field_path, class_name)
-              :: !object_property_mappings
+            add_mapping root_obj_name (root_field_path @ field_path) value
         | None -> ())
-    | _ -> ()
+    in
+    let add_object_mapping obj_name field_path class_name =
+      object_property_mappings :=
+        (obj_name, field_path, class_name) :: !object_property_mappings
+    in
+    let add_function_mapping obj_name field_path func_name =
+      object_property_function_mappings :=
+        (obj_name, field_path, func_name) :: !object_property_function_mappings
+    in
+    let add_factory_return_mapping obj_name field_path class_name =
+      object_property_factory_return_mappings :=
+        (obj_name, field_path, class_name)
+        :: !object_property_factory_return_mappings
+    in
+    let class_name_from_factory_expr expr =
+      match class_name_from_direct_object_property_factory_expr expr with
+      | Some _ as class_name -> class_name
+      | None -> (
+          match expr.G.e with
+          | G.Lambda fdef -> class_name_from_lambda_return fdef
+          | _ -> None)
+    in
+    match object_property_path_from_expr lval_expr with
+    | Some (obj_name, field_path) ->
+        (match class_name_from_expr rval_expr with
+        | Some class_name ->
+            add_object_mapping obj_name field_path class_name;
+            record_for_alias add_object_mapping obj_name field_path class_name
+        | None -> ());
+        (match function_alias_from_expr rval_expr with
+        | Some func_name ->
+            add_function_mapping obj_name field_path func_name;
+            record_for_alias add_function_mapping obj_name field_path func_name
+        | None -> ());
+        (match class_name_from_factory_expr rval_expr with
+        | Some class_name ->
+            add_factory_return_mapping obj_name field_path class_name;
+            record_for_alias add_factory_return_mapping obj_name field_path
+              class_name
+        | None -> ())
+    | None -> ()
   in
   let record_object_property_alias_mapping alias_name init_expr =
     match object_property_path_from_expr init_expr with
