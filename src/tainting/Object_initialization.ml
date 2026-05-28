@@ -1395,7 +1395,23 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                class_name )
              :: !object_property_mappings)
   in
-  let provider_array_exprs_from_name provider_name =
+  let is_provider_array_wrapper_name =
+    method_name_matches [ "makeEnvironmentProviders" ]
+  in
+  let rec provider_array_exprs_from_expr expr =
+    match expr.G.e with
+    | G.Container (G.Array, (_, provider_exprs, _)) -> Some provider_exprs
+    | G.N provider_name -> provider_array_exprs_from_name provider_name
+    | G.Call ({ e = G.N wrapper_name; _ }, (_, [ G.Arg providers_expr ], _))
+      when is_provider_array_wrapper_name wrapper_name ->
+        provider_array_exprs_from_expr providers_expr
+    | G.Call
+        ( { e = G.DotAccess (_, _, G.FN wrapper_name); _ },
+          (_, [ G.Arg providers_expr ], _) )
+      when is_provider_array_wrapper_name wrapper_name ->
+        provider_array_exprs_from_expr providers_expr
+    | _ -> None
+  and provider_array_exprs_from_name provider_name =
     !provider_array_mappings
     |> List.find_opt (fun (mapped_name, _provider_exprs) ->
            same_resolved_name provider_name mapped_name
@@ -1422,11 +1438,15 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
              true
          | { G.e = G.Container (G.Array, (_, nested_provider_exprs, _)); _ } ->
              provider_array_exprs_have_provider_entry nested_provider_exprs
-         | _ -> false)
+         | provider_expr -> (
+             match provider_array_exprs_from_expr provider_expr with
+             | Some provider_exprs ->
+                 provider_array_exprs_have_provider_entry provider_exprs
+             | None -> false))
   in
   let record_provider_array_mapping provider_name expr =
-    match expr.G.e with
-    | G.Container (G.Array, (_, provider_exprs, _))
+    match provider_array_exprs_from_expr expr with
+    | Some provider_exprs
       when provider_array_exprs_have_provider_entry provider_exprs ->
         provider_array_mappings :=
           (provider_name, provider_exprs) :: !provider_array_mappings
@@ -1452,17 +1472,20 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                G.e =
                  G.Call
                    ( { G.e = G.IdSpecial (G.Spread, _); _ },
-                     (_, [ G.Arg { G.e = G.N provider_name; _ } ], _) );
+                     (_, [ G.Arg provider_expr ], _) );
                _;
              } -> (
-               match provider_array_exprs_from_name provider_name with
+               match provider_array_exprs_from_expr provider_expr with
                | Some provider_exprs -> record_provider_array_exprs provider_exprs
                | None -> ())
            | provider_expr -> (
-               match class_name_from_provider_shorthand_expr provider_expr with
-               | Some class_name ->
-                   record_provider_shorthand_class_mapping class_name
-               | None -> ()))
+               match provider_array_exprs_from_expr provider_expr with
+               | Some provider_exprs -> record_provider_array_exprs provider_exprs
+               | None -> (
+                   match class_name_from_provider_shorthand_expr provider_expr with
+                   | Some class_name ->
+                       record_provider_shorthand_class_mapping class_name
+                   | None -> ())))
     in
     match expr.G.e with
     | G.Record (_, fields, _) ->
@@ -1479,18 +1502,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                  } -> (
                  match
                    ( field_name_from_entity field_entity,
-                     providers_expr.G.e )
+                     provider_array_exprs_from_expr providers_expr )
                  with
                  | ( Some field_name,
-                     G.Container (G.Array, (_, provider_exprs, _)) )
+                     Some provider_exprs )
                    when method_name_matches [ "providers" ] field_name ->
                      record_provider_array_exprs provider_exprs
-                 | Some field_name, G.N provider_name
-                   when method_name_matches [ "providers" ] field_name -> (
-                     match provider_array_exprs_from_name provider_name with
-                     | Some provider_exprs ->
-                         record_provider_array_exprs provider_exprs
-                     | None -> ())
                  | _ -> ())
              | _ -> ())
     | G.Call (_callee_expr, (_, args, _)) ->
