@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_js_constructor_parameter_service_container_factory_composition
+    message: Taint should flow through composed JavaScript service-container factories
+    languages: [js]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

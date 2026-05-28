@@ -859,17 +859,43 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                | _ -> ())
            | _ -> ())
     in
+    let object_property_entries_from_return_call callee_expr =
+      let returned_property_func_names =
+        returned_object_property_function_names_from_callee callee_expr
+      in
+      !function_return_object_property_mappings
+      |> List.filter_map
+           (fun (mapped_func_name, mapped_path, class_name) ->
+             if
+               List.exists
+                 (fun func_name -> same_resolved_name func_name mapped_func_name)
+                 returned_property_func_names
+             then Some (mapped_path, class_name)
+             else None)
+    in
+    let object_property_entries_from_local local_name =
+      !local_object_property_mappings
+      |> List.filter_map
+           (fun (mapped_local_name, mapped_path, class_name) ->
+             if same_resolved_name local_name mapped_local_name then
+               Some (mapped_path, class_name)
+             else None)
+    in
     let record_returned_object_properties return_expr =
       match return_expr.G.e with
       | G.Record (_, fields, _) -> record_returned_record_fields [] fields
       | G.N local_name ->
-          !local_object_property_mappings
-          |> List.iter
-               (fun (mapped_local_name, mapped_path, class_name) ->
-                 if same_resolved_name local_name mapped_local_name then
-                   function_return_object_property_mappings :=
-                     (func_name, mapped_path, class_name)
-                     :: !function_return_object_property_mappings)
+          object_property_entries_from_local local_name
+          |> List.iter (fun (mapped_path, class_name) ->
+                 function_return_object_property_mappings :=
+                   (func_name, mapped_path, class_name)
+                   :: !function_return_object_property_mappings)
+      | G.Call (callee_expr, _) ->
+          object_property_entries_from_return_call callee_expr
+          |> List.iter (fun (mapped_path, class_name) ->
+                 function_return_object_property_mappings :=
+                   (func_name, mapped_path, class_name)
+                   :: !function_return_object_property_mappings)
       | _ -> ()
     in
     let record_local_object_property_mappings var_name init_expr =
@@ -903,6 +929,18 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                  | _ -> ())
           in
           record_fields [] fields
+      | G.Call (callee_expr, _) ->
+          object_property_entries_from_return_call callee_expr
+          |> List.iter (fun (mapped_path, class_name) ->
+                 local_object_property_mappings :=
+                   (var_name, mapped_path, class_name)
+                   :: !local_object_property_mappings)
+      | G.N local_name ->
+          object_property_entries_from_local local_name
+          |> List.iter (fun (mapped_path, class_name) ->
+                 local_object_property_mappings :=
+                   (var_name, mapped_path, class_name)
+                   :: !local_object_property_mappings)
       | _ -> ()
     in
     let visitor =
