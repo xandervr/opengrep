@@ -1374,6 +1374,22 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           | None -> ())
       | _ -> ()
     in
+    let record_registration_tuple obj_expr provider_tuple_exprs =
+      match provider_tuple_exprs with
+      | [ key_expr; provider_spec_expr ] -> (
+          match
+            ( name_from_property_key_expr key_expr,
+              class_name_from_provider_spec_expr provider_spec_expr )
+          with
+          | Some field_name, Some class_name -> (
+              match object_property_path_from_base obj_expr field_name with
+              | Some (obj_name, field_path) ->
+                  record_object_property_class_mapping obj_name field_path
+                    class_name
+              | None -> ())
+          | _ -> ())
+      | _ -> ()
+    in
     match expr.G.e with
     | G.Call
         ( { e = G.DotAccess (obj_expr, _, G.FN method_name); _ },
@@ -1400,6 +1416,9 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         |> List.iter (function
              | { G.e = G.Record (_, fields, _); _ } ->
                  record_provider_object obj_expr fields
+             | { G.e = G.Container (G.Array, (_, provider_tuple_exprs, _)); _ }
+               ->
+                 record_registration_tuple obj_expr provider_tuple_exprs
              | _ -> ())
     | _ -> ()
   in
