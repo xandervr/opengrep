@@ -205,6 +205,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let object_mappings = ref [] in
   let object_property_mappings = ref [] in
   let object_property_alias_mappings = ref [] in
+  let injected_field_mappings = ref [] in
   let constructor_param_field_mappings = ref [] in
   let function_return_mappings = ref [] in
   let function_return_object_property_mappings = ref [] in
@@ -330,6 +331,16 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let is_inject_attribute_name =
     method_name_matches [ "Inject"; "Autowired" ]
   in
+  let injected_key_from_attrs attrs =
+    attrs
+    |> List.find_map (function
+         | G.NamedAttr (_, attr_name, attr_args)
+           when is_inject_attribute_name attr_name -> (
+             match Tok.unbracket attr_args with
+             | [ G.Arg key_expr ] -> name_from_static_property_expr key_expr
+             | _ -> None)
+         | _ -> None)
+  in
   let rec object_property_path_from_base obj_expr field_name =
     match object_property_path_from_expr obj_expr with
     | Some (obj_name, field_path) -> Some (obj_name, field_path @ [ field_name ])
@@ -446,6 +457,25 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                && same_resolved_path field_path mapped_path)
         |> Option.map (fun (_obj_name, _field_path, class_name) -> class_name)
     | None -> None
+  in
+  let class_name_from_injected_provider_key field_name =
+    !object_property_mappings
+    |> List.find_opt (fun (_mapped_obj, mapped_path, _class_name) ->
+           same_resolved_path [ field_name ] mapped_path)
+    |> Option.map (fun (_mapped_obj, _mapped_path, class_name) -> class_name)
+  in
+  let record_injected_field_mapping field_name injected_key =
+    let field_name =
+      match string_of_name field_name with
+      | Some field_name -> name_from_static_string_value field_name
+      | None -> field_name
+    in
+    injected_field_mappings :=
+      (field_name, injected_key) :: !injected_field_mappings;
+    match class_name_from_injected_provider_key injected_key with
+    | Some class_name ->
+        object_mappings := (field_name, class_name) :: !object_mappings
+    | None -> ()
   in
   let class_name_from_direct_object_property_factory obj_name field_path =
     !object_property_factory_return_mappings
@@ -620,7 +650,19 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
            | _ -> None)
       |> List.filter_map Fun.id
     in
+    let injected_param_keys =
+      Tok.unbracket fdef.G.fparams
+      |> List.filter_map (function
+           | G.Param { G.pname = Some ((param_name, _)); pattrs; _ } -> (
+               match injected_key_from_attrs pattrs with
+               | Some injected_key -> Some (param_name, injected_key)
+               | None -> None)
+           | _ -> None)
+    in
     let param_index param_name = List.assoc_opt param_name param_indexes in
+    let injected_param_key param_name =
+      List.assoc_opt param_name injected_param_keys
+    in
     let visitor =
       object
         inherit [_] G.iter as super
@@ -640,7 +682,11 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
               | Some index ->
                   constructor_param_field_mappings :=
                     { class_name; field_name; param_index = index }
-                    :: !constructor_param_field_mappings
+                    :: !constructor_param_field_mappings;
+                  (match injected_param_key param_name with
+                  | Some injected_key ->
+                      record_injected_field_mapping field_name injected_key
+                  | None -> ())
               | None -> ())
           | _ -> ());
           super#visit_expr () expr
@@ -806,7 +852,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         (obj_name, field_path, class_name) :: !object_property_mappings
     in
     add_object_mapping obj_name field_path class_name;
-    record_for_alias add_object_mapping obj_name field_path class_name
+    record_for_alias add_object_mapping obj_name field_path class_name;
+    !injected_field_mappings
+    |> List.iter (fun (field_name, injected_key) ->
+           if same_resolved_path [ injected_key ] field_path then
+             object_mappings :=
+               (field_name, class_name) :: !object_mappings)
   in
   let record_object_property_value_mapping obj_name field_path value_expr =
     let record_for_alias add_mapping obj_name field_path value =
@@ -871,29 +922,10 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | None -> ())
     | None -> ()
   in
-  let class_name_from_injected_property_key field_name =
-    !object_property_mappings
-    |> List.find_opt (fun (_mapped_obj, mapped_path, _class_name) ->
-           same_resolved_path [ field_name ] mapped_path)
-    |> Option.map (fun (_mapped_obj, _mapped_path, class_name) -> class_name)
-  in
-  let injected_property_key_from_attrs attrs =
-    attrs
-    |> List.find_map (function
-         | G.NamedAttr (_, attr_name, attr_args)
-           when is_inject_attribute_name attr_name -> (
-             match Tok.unbracket attr_args with
-             | [ G.Arg key_expr ] -> name_from_static_property_expr key_expr
-             | _ -> None)
-         | _ -> None)
-  in
   let record_injected_property_mapping entity =
-    match (entity.G.name, injected_property_key_from_attrs entity.G.attrs) with
-    | G.EN field_name, Some injected_key -> (
-        match class_name_from_injected_property_key injected_key with
-        | Some class_name ->
-            object_mappings := (field_name, class_name) :: !object_mappings
-        | None -> ())
+    match (entity.G.name, injected_key_from_attrs entity.G.attrs) with
+    | G.EN field_name, Some injected_key ->
+        record_injected_field_mapping field_name injected_key
     | _ -> ()
   in
   let record_object_property_assignment_mapping lval_expr rval_expr =
