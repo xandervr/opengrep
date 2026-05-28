@@ -66,6 +66,7 @@
 - JavaScript provider tuple arrays now resolve registration entries like `register([["source", asClass(Source)]])`, `asFunction(() => new Source())`, and `asValue(new Source())`, and the map-service coverage now includes constructor tuples such as `new Map([["source", new Source()]])`.
 - JavaScript two-argument provider spec registrations now resolve calls like `register("source", asClass(Source))`, `asFunction(() => new Source())`, and `asValue(new Source())`; the provider-spec handling is shared by ordinary object-property value mappings.
 - TypeScript `forwardRef(() => Class)` wrappers now resolve for explicit `@Inject(forwardRef(...))` constructor parameters, provider shorthand metadata entries, and provider-object token metadata.
+- JavaScript Inversify-style self bindings now resolve `bind(Source).toSelf()` and lifecycle-wrapped `bind(Source).toSelf().inSingletonScope()` class-token providers.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
 - JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, dynamic-keyed, dynamic-template-keyed, chained map, container API, provider-binding, provider API alias, provider method alias, provider alias, and registration-map service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
 
@@ -156,6 +157,7 @@
 - `9c24e76bb` - `fix: resolve provider tuple arrays` (signed)
 - `9bfe35ed3` - `fix: resolve provider spec registrations` (signed)
 - `4013b29f8` - `fix: resolve typescript forward ref providers` (signed)
+- `8229205c4` - `fix: resolve toself provider containers` (signed)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -179,7 +181,7 @@ The Docker-built help text now says:
     not support taint mode.
 ```
 
-**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, DI-class constructor type metadata, async `getAsync`/`resolveAsync` provider reads, parent-to-child container aliases, provider lifecycle-chain wrappers, provider-object registration arrays, direct `providers: [...]` metadata, provider-list aliases, class-token provider metadata, provider-list spreads, nested provider arrays, provider class shorthand entries, JavaScript provider tuple arrays, two-argument provider spec registrations, or TypeScript `forwardRef(() => Class)` wrappers. Good next targets are additional library-specific provider APIs, `@Optional()`/multi-decorator TypeScript DI variants, and any tuple-like TypeScript metadata forms that appear in real frameworks. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
+**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, DI-class constructor type metadata, async `getAsync`/`resolveAsync` provider reads, parent-to-child container aliases, provider lifecycle-chain wrappers, provider-object registration arrays, direct `providers: [...]` metadata, provider-list aliases, class-token provider metadata, provider-list spreads, nested provider arrays, provider class shorthand entries, JavaScript provider tuple arrays, two-argument provider spec registrations, TypeScript `forwardRef(() => Class)` wrappers, or Inversify-style `toSelf()` providers. Good next targets are additional library-specific provider APIs, `@Optional()`/multi-decorator TypeScript DI variants, and any tuple-like TypeScript metadata forms that appear in real frameworks. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
 
 **Next concrete actions:**
 
@@ -676,6 +678,62 @@ rules.taint_interfile_typescript_forward_ref_provider_metadata    targets/taint_
 Latest broad Docker direct scan matrix after `4013b29f8`:
 
 ```text
+taint_interfile_typescript_forward_ref_provider_metadata count=3 expected=3 errors=0 interfile_lang_count=['TypeScript'] status=0
+taint_interfile_provider_spec_registration_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_provider_tuple_array_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_map_service_container count=4 expected=4 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_typescript_provider_shorthand_metadata count=3 expected=3 errors=0 interfile_lang_count=['TypeScript'] status=0
+taint_interfile_typescript_provider_nested_array_metadata count=3 expected=3 errors=0 interfile_lang_count=['TypeScript'] status=0
+taint_interfile_typescript_provider_metadata_spread_container count=3 expected=3 errors=0 interfile_lang_count=['TypeScript'] status=0
+taint_interfile_typescript_provider_token_metadata count=3 expected=3 errors=0 interfile_lang_count=['TypeScript'] status=0
+taint_interfile_typescript_provider_metadata_alias_container count=3 expected=3 errors=0 interfile_lang_count=['TypeScript'] status=0
+taint_interfile_typescript_provider_metadata_container count=3 expected=3 errors=0 interfile_lang_count=['TypeScript'] status=0
+taint_interfile_provider_object_array_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_provider_lifecycle_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_hierarchical_provider_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_async_provider_container count=3 expected=3 errors=0 interfile_lang_count=['TypeScript', 'JavaScript'] status=0
+taint_interfile_js_constructor_parameter_provider_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_provider_api_alias_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_provider_method_alias_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_provider_alias_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_service_container count=1 expected=1 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_string_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_constant_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_computed_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_template_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_dynamic_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_dynamic_template_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_chained_map_service_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_container_api_service_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_service_container_factory count=2 expected=2 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_service_container_factory_alias count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_service_container_factory_destructuring count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_js_constructor_parameter_service_container_factory_composition count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
+taint_interfile_typescript_decorated_metadata_injection count=3 expected=3 errors=0 interfile_lang_count=['TypeScript'] status=0
+taint_interfile_typescript_injectable_constructor_metadata count=2 expected=2 errors=0 interfile_lang_count=['TypeScript'] status=0
+taint_interfile_language_matrix count=28 expected=28 errors=0 interfile_lang_count=['C++', 'C', 'Lisp', 'Scheme', 'Solidity', 'Lua', 'Ruby', 'Dart', 'OCaml', 'Scala', 'Cairo', 'Rust', 'C#', 'Hack', 'Circom', 'Clojure', 'TypeScript', 'PHP', 'Move on Aptos', 'Apex', 'Bash', 'Swift', 'Vue', 'R', 'Kotlin', 'Julia', 'Move on Sui', 'Vb'] status=0
+taint_interfile_parser_smoke count=13 expected=13 errors=0 interfile_lang_count=['XML', 'Python 3', 'JSON', 'HTML', 'Terraform', 'QL', 'YAML', 'Dockerfile', 'Prometheus Query Language', 'Python 2', 'Vue', 'Jsonnet', 'Protocol Buffers'] status=0
+matrix_failures=0
+```
+
+Latest toSelf-provider red proof before `8229205c4`:
+
+```text
+to_self_provider_red count=0 expected=2 errors=0 interfile_lang_count=['JavaScript'] status=0
+```
+
+Latest toSelf-provider green proof after `8229205c4`:
+
+```text
+to_self_provider_green count=2 expected=2 errors=0 interfile_lang_count=['JavaScript'] status=0
+rules.taint_interfile_js_constructor_parameter_to_self_provider_container    targets/taint_interfile_js_constructor_parameter_to_self_provider_container/direct/app.js    9
+rules.taint_interfile_js_constructor_parameter_to_self_provider_container    targets/taint_interfile_js_constructor_parameter_to_self_provider_container/lifecycle/app.js    9
+```
+
+Latest broad Docker direct scan matrix after `8229205c4`:
+
+```text
+taint_interfile_js_constructor_parameter_to_self_provider_container count=2 expected=2 errors=0 interfile_lang_count=['JavaScript'] status=0
 taint_interfile_typescript_forward_ref_provider_metadata count=3 expected=3 errors=0 interfile_lang_count=['TypeScript'] status=0
 taint_interfile_provider_spec_registration_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
 taint_interfile_provider_tuple_array_container count=3 expected=3 errors=0 interfile_lang_count=['JavaScript'] status=0
