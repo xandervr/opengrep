@@ -81,8 +81,11 @@
 - JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, dynamic-keyed, dynamic-template-keyed, chained map, container API, provider-binding, provider API alias, provider method alias, provider alias, and registration-map service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
 - TypeScript multi-provider collection metadata now resolves `sources[0].getInput()` style receiver calls after provider metadata injects a collection of service instances.
 - Interfile taint precompute now caches signatures per analyzer/rule set, avoids rebuilding the same combined analysis for every target, defers combined call-graph construction until a taint rule has actually matched sources/sinks, and falls back to a bounded source/sink-file slice when full precompute hits the normal rule timeout. The ANPR repro command dropped from roughly 150s after the first cache refactor to 16.11s text output / 15.83s JSON output on this Mac, with JSON reporting `results=0`, `errors=0`, `interfile=["JavaScript"]`.
+- JavaScript/TypeScript interfile taint source, sanitizer, and propagator formula matching now uses the formula regexp prefilter to shrink the merged AST to candidate files before running structural pattern matching. Sink formula matching intentionally remains unfiltered because sink files gate per-file dataflow work; prefiltering sinks expanded the ANPR work set in local profiling.
+- ANPR performance checkpoint: the external ANPR rule was not edited. The JSON repro command measured 16.04s before this formula prefilter, then 14.99s, 14.73s, and 14.66s on warm runs after the change, with JSON unchanged at `results=0`, `errors=0`, `interfile=["JavaScript"]`. One post-build outlier measured 19.43s, so keep comparing multiple runs.
 
 **Latest pushed checkpoints:**
+- `ae270e97bf73b46c16928e79edd3b82ebad9e1af` - `fix: prefilter interfile taint sources` (unsigned: local 1Password SSH signing hung in this session)
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
 - `47d785905a858ea1f0ef5e22b2ae6980cdca9db4` - `fix: propagate interfile side-effect sanitizers`
 - `b6838a1d4ad2995a765d6cfef7174e52531271b8` - `docs: update interfile taint handoff`
@@ -235,16 +238,18 @@ The Docker-built help text now says:
     not support taint mode.
 ```
 
-**Immediate resume point:** continue the broader Semgrep Pro parity audit and performance hardening. The current high-value follow-up is to reduce full combined call-graph construction further so large repos do not need the source/sink-file fallback as often. For framework parity, good next targets are additional library-specific provider APIs and tuple-like TypeScript metadata forms that appear in real frameworks. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
+**Immediate resume point:** continue performance hardening without changing external repro rules. The current high-value follow-up is to profile the remaining `Match_search_mode.matches_of_xpatterns` and parse/name-resolution cost on the ANPR repro, then reduce full combined call-graph construction further so large repos do not need the source/sink-file fallback as often. For framework parity, good next targets are additional library-specific provider APIs and tuple-like TypeScript metadata forms that appear in real frameworks. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
 
 **Next concrete actions:**
 
 1. Re-run the local direct scan matrix after any further engine change; use Docker only as an optional parity check.
 2. Keep `git diff --check` and `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` green.
-3. Keep the ANPR performance repro in the loop when touching interfile precompute:
-   `bin/opengrep scan -f /Users/xander/Documents/Work/Focus/Projects.nosync/ANPR/test.yaml /Users/xander/Documents/Work/Focus/Projects.nosync/ANPR/trafficlists-app --taint-interfile --dataflow-traces`.
+3. Keep the ANPR performance repro in the loop when touching interfile precompute, run it at least twice to filter local noise, and compare JSON result/error counts:
+   `bin/opengrep scan -f /Users/xander/Documents/Work/Focus/Projects.nosync/ANPR/test.yaml /Users/xander/Documents/Work/Focus/Projects.nosync/ANPR/trafficlists-app --taint-interfile --dataflow-traces --json`.
 4. Continue auditing remaining Semgrep Pro parity gaps beyond the covered import/value/export/object/trace/inheritance cases.
 5. Audit remaining class-field and dispatch gaps before making any broad class-field parity claim: deeper framework-specific object construction forms, language-specific class-field edge cases, and deeper callback/HOF language-specific forms.
+
+Known local test gaps observed while isolating the latest performance change: `test_interfile_taint_flows_through_commonjs_require` reported 2/3 findings, and `test_interfile_taint_parser_smoke_matrix` missed QL/protobuf findings. Both reproduced with the formula prefilter disabled, so do not treat them as caused by the JavaScript/TypeScript source/sanitizer/propagator prefilter.
 
 Latest side-effect sanitizer verification:
 
