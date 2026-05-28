@@ -891,6 +891,33 @@ def test_interfile_taint_flows_through_javascript_inline_object_factory_properti
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_javascript_object_factory_property_aliases(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_js_constructor_parameter_object_factory_property_alias.yaml",
+        target_name="taint_interfile_js_constructor_parameter_object_factory_property_alias",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = sorted(output["results"], key=lambda result: result["path"])
+
+    assert output["interfile_languages_used"] == ["JavaScript"]
+    assert len(results) == 2
+    assert all(
+        result["check_id"]
+        == "rules.taint_interfile_js_constructor_parameter_object_factory_property_alias"
+        for result in results
+    )
+    assert [result["path"] for result in results] == [
+        "targets/taint_interfile_js_constructor_parameter_object_factory_property_alias/inline/app.js",
+        "targets/taint_interfile_js_constructor_parameter_object_factory_property_alias/named/app.js",
+    ]
+    assert [result["start"]["line"] for result in results] == [9, 9]
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_javascript_branch_constructor_aliases(
     run_semgrep_in_tmp: RunSemgrep,
 ):

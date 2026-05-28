@@ -295,26 +295,36 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
            && same_resolved_path [ field_name ] mapped_path)
     |> Option.map (fun (_obj_name, _field_path, class_name) -> class_name)
   in
+  let class_name_from_direct_object_property_factory obj_name field_path =
+    !object_property_factory_return_mappings
+    |> List.find_opt (fun (mapped_obj, mapped_path, _class_name) ->
+           same_resolved_name obj_name mapped_obj
+           && same_resolved_path field_path mapped_path)
+    |> Option.map (fun (_obj_name, _field_path, class_name) -> class_name)
+  in
+  let function_name_from_object_property_factory obj_name field_path =
+    !object_property_function_mappings
+    |> List.find_opt (fun (mapped_obj, mapped_path, _func_name) ->
+           same_resolved_name obj_name mapped_obj
+           && same_resolved_path field_path mapped_path)
+    |> Option.map (fun (_obj_name, _field_path, func_name) -> func_name)
+  in
+  let class_name_from_direct_object_property_factory_expr expr =
+    match object_property_path_from_expr expr with
+    | Some (obj_name, field_path) ->
+        class_name_from_direct_object_property_factory obj_name field_path
+    | None -> None
+  in
   let class_name_from_object_property_function_mapping callee_expr =
     match object_property_path_from_expr callee_expr with
     | Some (obj_name, field_path) ->
-        let class_name_from_direct_mapping =
-          !object_property_factory_return_mappings
-          |> List.find_opt (fun (mapped_obj, mapped_path, _class_name) ->
-                 same_resolved_name obj_name mapped_obj
-                 && same_resolved_path field_path mapped_path)
-          |> Option.map (fun (_obj_name, _field_path, class_name) -> class_name)
-        in
-        (match class_name_from_direct_mapping with
+        (match class_name_from_direct_object_property_factory obj_name field_path with
         | Some _ as class_name -> class_name
-        | None ->
-            !object_property_function_mappings
-            |> List.find_opt (fun (mapped_obj, mapped_path, _func_name) ->
-                   same_resolved_name obj_name mapped_obj
-                   && same_resolved_path field_path mapped_path)
-            |> Option.map (fun (_obj_name, _field_path, func_name) ->
-                   name_from_name_mapping function_return_mappings func_name)
-            |> Option.join)
+        | None -> (
+            match function_name_from_object_property_factory obj_name field_path with
+            | Some func_name ->
+                name_from_name_mapping function_return_mappings func_name
+            | None -> None))
     | None -> None
   in
   let object_property_path_from_alias alias_name =
@@ -368,14 +378,23 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                 match name_from_name_mapping function_return_mappings name with
                 | Some _ -> Some name
                 | None -> None))
-        | _ -> None)
+        | _ -> (
+            match object_property_path_from_expr expr with
+            | Some (obj_name, field_path) ->
+                function_name_from_object_property_factory obj_name field_path
+            | None -> None))
   in
   let record_function_alias_mapping alias_name init_expr =
     match function_alias_from_expr init_expr with
     | Some returned_func ->
         function_alias_mappings :=
           (alias_name, returned_func) :: !function_alias_mappings
-    | None -> ()
+    | None -> (
+        match class_name_from_direct_object_property_factory_expr init_expr with
+        | Some class_name ->
+            function_return_mappings :=
+              (alias_name, class_name) :: !function_return_mappings
+        | None -> ())
   in
   let rec class_name_from_expr expr =
     match extract_class_name_from_constructor expr lang class_names with
@@ -521,6 +540,15 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                          object_property_function_mappings :=
                            (obj_name, field_path, func_name)
                            :: !object_property_function_mappings
+                     | None -> ());
+                     (match
+                        class_name_from_direct_object_property_factory_expr
+                          field_init
+                      with
+                     | Some class_name ->
+                         object_property_factory_return_mappings :=
+                           (obj_name, field_path, class_name)
+                           :: !object_property_factory_return_mappings
                      | None -> ());
                      (match field_init.G.e with
                      | G.Lambda fdef -> (
