@@ -44,7 +44,7 @@
 - JavaScript and TypeScript constructor-assigned helper instances now resolve when constructors assign `this.source = new Source()` and later methods call `this.source.getInput()`.
 - TypeScript constructor parameter properties now resolve when a typed parameter property such as `constructor(private source: Source)` is later used through `this.source.getInput()`.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
-- JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed and constant-keyed service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
+- JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, and computed-keyed service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -103,6 +103,7 @@
 - `a44d6554012073f690c7488c5be14f4b8f5da970` - `fix: resolve javascript composed service container factories` (unsigned for the same local signing issue)
 - `f9039b2f1ff266ecd0653c543bbb30bbd673a5c5` - `fix: resolve javascript string keyed service containers` (unsigned for the same local signing issue)
 - `0cfd4e3809bda6e01b78e1dc1b993cc03dd510f8` - `fix: resolve javascript constant keyed service containers` (unsigned for the same local signing issue)
+- `350237126d02c34c161020410ca014cbbec4ec80` - `fix: resolve javascript computed keyed service containers` (unsigned for the same local signing issue)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -284,7 +285,7 @@ python count=1 errors=0 interfile_lang_count=1
 js count=1 errors=0 interfile_lang_count=1
 ```
 
-Latest broad Docker direct scan matrix after `0cfd4e380`:
+Latest broad Docker direct scan matrix after `350237126`:
 
 ```text
 taint_interfile_js count=1 expected=1 errors=0 interfile_lang_count=1
@@ -304,6 +305,7 @@ taint_interfile_js_constructor_parameter_factory_function_alias count=1 expected
 taint_interfile_js_constructor_parameter_service_container count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_string_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_constant_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=1
+taint_interfile_js_constructor_parameter_computed_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_service_container_factory count=2 expected=2 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_service_container_factory_alias count=3 expected=3 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_service_container_factory_destructuring count=3 expected=3 errors=0 interfile_lang_count=1
@@ -1101,13 +1103,49 @@ rules.taint_interfile_js_constructor_parameter_service_container_factory_alias  
 Current verification after the fix:
 
 - Docker `make core` passes.
-- Full direct regression matrix passes, including `taint_interfile_js_constructor_parameter_instance count=1`, `taint_interfile_js_constructor_parameter_alias count=1`, `taint_interfile_js_constructor_parameter_reassigned_alias count=1`, `taint_interfile_js_constructor_parameter_factory count=1`, `taint_interfile_js_constructor_parameter_factory_local_alias count=1`, `taint_interfile_js_constructor_parameter_arrow_factory count=1`, `taint_interfile_js_constructor_parameter_higher_order_factory count=1`, `taint_interfile_js_constructor_parameter_factory_function_alias count=1`, `taint_interfile_js_constructor_parameter_service_container count=1`, `taint_interfile_js_constructor_parameter_string_keyed_service_container count=3`, `taint_interfile_js_constructor_parameter_constant_keyed_service_container count=3`, `taint_interfile_js_constructor_parameter_service_container_factory count=2`, `taint_interfile_js_constructor_parameter_service_container_factory_alias count=3`, `taint_interfile_js_constructor_parameter_service_container_factory_destructuring count=3`, `taint_interfile_js_constructor_parameter_service_container_factory_composition count=3`, `taint_interfile_js_constructor_parameter_service_destructuring count=1`, `taint_interfile_js_constructor_parameter_nested_service_container count=1`, `taint_interfile_js_constructor_parameter_mutated_service_container count=1`, `taint_interfile_js_constructor_parameter_spread_service_container count=1`, `taint_interfile_js_constructor_parameter_rest_service_container count=1`, `taint_interfile_js_constructor_parameter_nested_mutated_service_container count=1`, `taint_interfile_js_constructor_parameter_object_factory_property count=1`, `taint_interfile_js_constructor_parameter_inline_object_factory_property count=1`, `taint_interfile_js_constructor_parameter_object_factory_property_alias count=2`, `taint_interfile_js_constructor_parameter_mutated_object_factory_property_alias count=2`, `taint_interfile_js_constructor_parameter_branch_alias count=1`, `taint_interfile_constructor_field_instance count=2`, `taint_interfile_class_field_instance count=2`, `taint_interfile_callback_body_language_matrix count=6`, `taint_interfile_language_matrix count=28`, `taint_interfile_parser_smoke count=13`, and `matrix_failures=0`.
+- Full direct regression matrix passes, including `taint_interfile_js_constructor_parameter_instance count=1`, `taint_interfile_js_constructor_parameter_alias count=1`, `taint_interfile_js_constructor_parameter_reassigned_alias count=1`, `taint_interfile_js_constructor_parameter_factory count=1`, `taint_interfile_js_constructor_parameter_factory_local_alias count=1`, `taint_interfile_js_constructor_parameter_arrow_factory count=1`, `taint_interfile_js_constructor_parameter_higher_order_factory count=1`, `taint_interfile_js_constructor_parameter_factory_function_alias count=1`, `taint_interfile_js_constructor_parameter_service_container count=1`, `taint_interfile_js_constructor_parameter_string_keyed_service_container count=3`, `taint_interfile_js_constructor_parameter_constant_keyed_service_container count=3`, `taint_interfile_js_constructor_parameter_computed_keyed_service_container count=3`, `taint_interfile_js_constructor_parameter_service_container_factory count=2`, `taint_interfile_js_constructor_parameter_service_container_factory_alias count=3`, `taint_interfile_js_constructor_parameter_service_container_factory_destructuring count=3`, `taint_interfile_js_constructor_parameter_service_container_factory_composition count=3`, `taint_interfile_js_constructor_parameter_service_destructuring count=1`, `taint_interfile_js_constructor_parameter_nested_service_container count=1`, `taint_interfile_js_constructor_parameter_mutated_service_container count=1`, `taint_interfile_js_constructor_parameter_spread_service_container count=1`, `taint_interfile_js_constructor_parameter_rest_service_container count=1`, `taint_interfile_js_constructor_parameter_nested_mutated_service_container count=1`, `taint_interfile_js_constructor_parameter_object_factory_property count=1`, `taint_interfile_js_constructor_parameter_inline_object_factory_property count=1`, `taint_interfile_js_constructor_parameter_object_factory_property_alias count=2`, `taint_interfile_js_constructor_parameter_mutated_object_factory_property_alias count=2`, `taint_interfile_js_constructor_parameter_branch_alias count=1`, `taint_interfile_constructor_field_instance count=2`, `taint_interfile_class_field_instance count=2`, `taint_interfile_callback_body_language_matrix count=6`, `taint_interfile_language_matrix count=28`, `taint_interfile_parser_smoke count=13`, and `matrix_failures=0`.
 - `git diff --check` passes.
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
-Boundary note: direct constructor-argument object shapes, simple local helper aliases, simple alias reassignments, simple factory-returned constructor helpers, factory-local helper aliases, variable-assigned arrow factories, simple higher-order factories, callable factory variable aliases, service-container object properties, static string-keyed and constant-keyed service-container object properties, service-container factory returns, service-container factory aliases, direct destructuring from service-container factory returns, simple composed service-container factory returns, destructured service-container properties, nested service-container property paths, mutated service-container property assignments, object-spread service containers, object-rest service containers, nested mutated service-container aliases, object factory properties, inline object factory properties, object factory property aliases, mutated object factory property aliases, and same-class conditional branch aliases are covered. Broader dependency-injection forms remain unaudited, including framework/container injection and dynamic container lookups with computed keys.
+Boundary note: direct constructor-argument object shapes, simple local helper aliases, simple alias reassignments, simple factory-returned constructor helpers, factory-local helper aliases, variable-assigned arrow factories, simple higher-order factories, callable factory variable aliases, service-container object properties, static string-keyed, constant-keyed, and simple computed-keyed service-container object properties, service-container factory returns, service-container factory aliases, direct destructuring from service-container factory returns, simple composed service-container factory returns, destructured service-container properties, nested service-container property paths, mutated service-container property assignments, object-spread service containers, object-rest service containers, nested mutated service-container aliases, object factory properties, inline object factory properties, object factory property aliases, mutated object factory property aliases, and same-class conditional branch aliases are covered. Broader dependency-injection forms remain unaudited, including framework/container injection, template expressions, and map-like container method calls.
 
-Next resume point: continue auditing broader dependency-injection object-shape forms, especially framework/container injection and dynamic container lookups with computed keys.
+Next resume point: continue auditing broader dependency-injection object-shape forms, especially map-like container method calls, template expressions, and framework/container injection.
+
+---
+
+## Latest Session Update: JavaScript Computed-Keyed Service Containers Green
+
+JavaScript service containers now preserve object-property mappings through simple static string expressions used as bracket keys, such as `services["sou" + "rce"]` or `services[SOURCE_PREFIX + "rce"]`.
+
+- `src/tainting/Object_initialization.ml` now evaluates static string expressions made from literal strings, previously recorded string constants, and `+` concatenation.
+- The string-key prepass records those computed key values before returned-object and object-property analysis runs.
+- `cli/tests/default/e2e/rules/taint_interfile_js_constructor_parameter_computed_keyed_service_container.yaml` and `targets/taint_interfile_js_constructor_parameter_computed_keyed_service_container/` lock object-literal, later assignment, and factory-return forms.
+
+Red proof before the fix:
+
+```text
+taint_interfile_js_constructor_parameter_computed_keyed_service_container count=0 expected=3 errors=0 interfile_lang_count=1
+```
+
+Green proof after static string-expression evaluation:
+
+```text
+taint_interfile_js_constructor_parameter_computed_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=1
+rules.taint_interfile_js_constructor_parameter_computed_keyed_service_container    targets/taint_interfile_js_constructor_parameter_computed_keyed_service_container/assignment/app.js    9
+rules.taint_interfile_js_constructor_parameter_computed_keyed_service_container    targets/taint_interfile_js_constructor_parameter_computed_keyed_service_container/factory/app.js    9
+rules.taint_interfile_js_constructor_parameter_computed_keyed_service_container    targets/taint_interfile_js_constructor_parameter_computed_keyed_service_container/literal/app.js    9
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes.
+- Full direct regression matrix passes with `matrix_failures=0`, including `taint_interfile_js_constructor_parameter_computed_keyed_service_container count=3`, `taint_interfile_js_constructor_parameter_constant_keyed_service_container count=3`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+
+Boundary note: simple static string concatenation is covered for JavaScript bracket keys in direct object reads, property assignments, and object-shaped factory returns. Template expressions, map-like container method calls, and framework/container injection remain unaudited.
+
+Next resume point: continue auditing broader dependency-injection object-shape forms, especially map-like container method calls, template expressions, and framework/container injection.
 
 ---
 
