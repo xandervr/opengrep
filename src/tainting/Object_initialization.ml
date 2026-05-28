@@ -931,6 +931,32 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
              object_mappings :=
                (field_name, class_name) :: !object_mappings)
   in
+  let class_name_from_class_reference expr =
+    match expr.G.e with
+    | G.N name when is_known_class name class_names -> Some name
+    | _ -> None
+  in
+  let class_name_from_provider_expr provider_method_name provider_expr =
+    match provider_method_name with
+    | "to" | "useClass" | "asClass" -> class_name_from_class_reference provider_expr
+    | "toConstantValue" | "useValue" | "asValue" ->
+        class_name_from_expr provider_expr
+    | "toDynamicValue" | "useFactory" | "asFunction" -> (
+        match provider_expr.G.e with
+        | G.Lambda fdef -> class_name_from_lambda_return fdef
+        | _ -> class_name_from_function_return provider_expr)
+    | _ -> None
+  in
+  let class_name_from_provider_spec_expr expr =
+    match expr.G.e with
+    | G.Call ({ e = G.N provider_name; _ }, (_, [ G.Arg provider_expr ], _)) -> (
+        match method_name_string provider_name with
+        | Some provider_method_name
+          when is_object_property_provider_method_name provider_name ->
+            class_name_from_provider_expr provider_method_name provider_expr
+        | _ -> None)
+    | _ -> None
+  in
   let record_object_property_value_mapping obj_name field_path value_expr =
     let record_for_alias add_mapping obj_name field_path value =
       match object_property_path_from_alias obj_name with
@@ -971,22 +997,6 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | None -> ()
   in
   let record_object_property_provider_mapping expr =
-    let class_name_from_class_reference expr =
-      match expr.G.e with
-      | G.N name when is_known_class name class_names -> Some name
-      | _ -> None
-    in
-    let class_name_from_provider_expr provider_method_name provider_expr =
-      match provider_method_name with
-      | "to" | "useClass" | "asClass" -> class_name_from_class_reference provider_expr
-      | "toConstantValue" | "useValue" | "asValue" ->
-          class_name_from_expr provider_expr
-      | "toDynamicValue" | "useFactory" | "asFunction" -> (
-          match provider_expr.G.e with
-          | G.Lambda fdef -> class_name_from_lambda_return fdef
-          | _ -> class_name_from_function_return provider_expr)
-      | _ -> None
-    in
     match object_property_provider_call_from_expr expr with
     | Some (obj_name, field_path, provider_method_name, provider_expr) -> (
         match class_name_from_provider_expr provider_method_name provider_expr with
@@ -994,6 +1004,38 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
             record_object_property_class_mapping obj_name field_path class_name
         | None -> ())
     | None -> ()
+  in
+  let record_object_property_registration_map_mapping expr =
+    let record_registration_field obj_expr field_entity provider_spec_expr =
+      match
+        ( field_name_from_entity field_entity,
+          class_name_from_provider_spec_expr provider_spec_expr )
+      with
+      | Some field_name, Some class_name -> (
+          match object_property_path_from_base obj_expr field_name with
+          | Some (obj_name, field_path) ->
+              record_object_property_class_mapping obj_name field_path class_name
+          | None -> ())
+      | _ -> ()
+    in
+    match expr.G.e with
+    | G.Call
+        ( { e = G.DotAccess (obj_expr, _, G.FN method_name); _ },
+          (_, [ G.Arg { e = G.Record (_, fields, _); _ } ], _) )
+      when method_name_matches [ "register" ] method_name ->
+        fields
+        |> List.iter (function
+             | G.F
+                 {
+                   G.s =
+                     G.DefStmt
+                       ( field_entity,
+                         G.FieldDefColon { G.vinit = Some provider_spec_expr; _ } );
+                   _;
+                 } ->
+                 record_registration_field obj_expr field_entity provider_spec_expr
+             | _ -> ())
+    | _ -> ()
   in
   let record_injected_property_mapping entity =
     match (entity.G.name, injected_key_from_attrs entity.G.attrs) with
@@ -1411,6 +1453,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                     record_object_property_mappings var_name init_expr;
                     record_object_property_set_chain_mapping var_name init_expr;
                     record_object_property_provider_mapping init_expr;
+                    record_object_property_registration_map_mapping init_expr;
                     record_object_property_alias_mapping var_name init_expr;
                     record_destructured_object_property_mappings init_expr;
                     record_function_alias_mapping var_name init_expr;
@@ -1453,6 +1496,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | G.ExprStmt (expr, _) -> (
             record_object_property_method_mapping expr;
             record_object_property_provider_mapping expr;
+            record_object_property_registration_map_mapping expr;
             match expr.G.e with
             | G.Assign (lval_expr, _, rval_expr) -> (
                 record_object_property_assignment_mapping lval_expr rval_expr;
