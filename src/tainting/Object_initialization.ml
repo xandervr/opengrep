@@ -383,6 +383,35 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | Some name -> List.exists (String.equal name) names
     | _ -> false
   in
+  let name_from_lambda_returned_name fdef =
+    match fdef.G.fbody with
+    | G.FBExpr { G.e = G.N name; _ } -> Some name
+    | _ ->
+        let returned_name = ref None in
+        let visitor =
+          object
+            inherit [_] G.iter as super
+
+            method! visit_stmt () stmt =
+              (match (!returned_name, stmt.G.s) with
+              | None, G.Return (_, Some { G.e = G.N name; _ }, _) ->
+                  returned_name := Some name
+              | _ -> ());
+              super#visit_stmt () stmt
+          end
+        in
+        visitor#visit_stmt () (AST_generic_helpers.funcbody_to_stmt fdef.G.fbody);
+        !returned_name
+  in
+  let name_from_forward_ref_expr expr =
+    match expr.G.e with
+    | G.Call
+        ( { G.e = G.N forward_ref_name; _ },
+          (_, [ G.Arg { G.e = G.Lambda fdef; _ } ], _) )
+      when method_name_matches [ "forwardRef" ] forward_ref_name ->
+        name_from_lambda_returned_name fdef
+    | _ -> None
+  in
   let is_object_property_get_method_name =
     method_name_matches
       [ "get"; "getAsync"; "resolve"; "resolveAsync"; "lookup" ]
@@ -438,7 +467,11 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
              | [ G.Arg { G.e = G.N class_token; _ } ]
                when is_class_like_name class_token ->
                  Some class_token
-             | [ G.Arg key_expr ] -> name_from_property_key_expr key_expr
+             | [ G.Arg key_expr ] -> (
+                 match name_from_forward_ref_expr key_expr with
+                 | Some class_token when is_class_like_name class_token ->
+                     Some class_token
+                 | _ -> name_from_property_key_expr key_expr)
              | _ -> None)
          | _ -> None)
   in
@@ -1077,7 +1110,10 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let class_name_from_class_reference expr =
     match expr.G.e with
     | G.N name when is_known_class name class_names -> Some name
-    | _ -> None
+    | _ -> (
+        match name_from_forward_ref_expr expr with
+        | Some name when is_known_class name class_names -> Some name
+        | _ -> None)
   in
   let class_name_from_provider_expr provider_method_name provider_expr =
     match provider_method_name with
@@ -1198,6 +1234,27 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
              | None -> None)
          | _ -> None)
   in
+  let provider_key_names_from_expr key_expr =
+    let add_unique key_name key_names =
+      if List.exists (same_name key_name) key_names then key_names
+      else key_name :: key_names
+    in
+    let key_names =
+      match name_from_property_key_expr key_expr with
+      | Some key_name -> [ key_name ]
+      | None -> []
+    in
+    let key_names =
+      match key_expr.G.e with
+      | G.N class_token when is_known_class class_token class_names ->
+          add_unique class_token key_names
+      | _ -> key_names
+    in
+    match name_from_forward_ref_expr key_expr with
+    | Some class_token when is_known_class class_token class_names ->
+        add_unique class_token key_names
+    | _ -> key_names
+  in
   let class_mapping_from_provider_object_fields fields =
     match
       ( field_init_named [ "provide"; "token"; "name" ] fields,
@@ -1205,10 +1262,10 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     with
     | Some key_expr, Some (provider_method_name, provider_expr) -> (
         match
-          ( name_from_property_key_expr key_expr,
+          ( provider_key_names_from_expr key_expr,
             class_name_from_provider_expr provider_method_name provider_expr )
         with
-        | Some field_name, Some class_name -> Some (field_name, class_name)
+        | field_name :: _, Some class_name -> Some (field_name, class_name)
         | _ -> None)
     | _ -> None
   in
@@ -1220,18 +1277,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | Some key_expr, Some (provider_method_name, provider_expr) -> (
         match class_name_from_provider_expr provider_method_name provider_expr with
         | Some class_name ->
-            let key_names =
-              match name_from_property_key_expr key_expr with
-              | Some key_name -> [ key_name ]
-              | None -> []
-            in
-            let key_names =
-              match key_expr.G.e with
-              | G.N class_token when is_known_class class_token class_names ->
-                  if List.exists (same_name class_token) key_names then key_names
-                  else class_token :: key_names
-              | _ -> key_names
-            in
+            let key_names = provider_key_names_from_expr key_expr in
             key_names |> List.map (fun key_name -> (key_name, class_name))
         | None -> [])
     | _ -> []
@@ -1264,7 +1310,11 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let class_name_from_provider_shorthand_expr expr =
     match expr.G.e with
     | G.N class_name when is_class_like_name class_name -> Some class_name
-    | _ -> None
+    | _ -> (
+        match name_from_forward_ref_expr expr with
+        | Some class_name when is_known_class class_name class_names ->
+            Some class_name
+        | _ -> None)
   in
   let rec provider_array_exprs_have_provider_entry provider_exprs =
     provider_exprs
