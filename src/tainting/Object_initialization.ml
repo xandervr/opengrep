@@ -1121,6 +1121,27 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | Some name when is_known_class name class_names -> Some name
         | _ -> None)
   in
+  let provider_key_names_from_expr key_expr =
+    let add_unique key_name key_names =
+      if List.exists (same_name key_name) key_names then key_names
+      else key_name :: key_names
+    in
+    let key_names =
+      match name_from_property_key_expr key_expr with
+      | Some key_name -> [ key_name ]
+      | None -> []
+    in
+    let key_names =
+      match key_expr.G.e with
+      | G.N class_token when is_known_class class_token class_names ->
+          add_unique class_token key_names
+      | _ -> key_names
+    in
+    match name_from_forward_ref_expr key_expr with
+    | Some class_token when is_known_class class_token class_names ->
+        add_unique class_token key_names
+    | _ -> key_names
+  in
   let class_name_from_provider_expr provider_method_name provider_expr =
     match provider_method_name with
     | "to" | "useClass" | "asClass" -> class_name_from_class_reference provider_expr
@@ -1131,11 +1152,11 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | G.Lambda fdef -> class_name_from_lambda_return fdef
         | _ -> class_name_from_function_return provider_expr)
     | "useExisting" | "toService" | "aliasTo" -> (
-        match name_from_property_key_expr provider_expr with
-        | Some provider_key -> (
-            match class_name_from_injected_provider_key provider_key with
-            | Some _ as class_name -> class_name
-            | None -> class_name_from_class_reference provider_expr)
+        match
+          provider_key_names_from_expr provider_expr
+          |> List.find_map class_name_from_injected_provider_key
+        with
+        | Some _ as class_name -> class_name
         | None -> class_name_from_class_reference provider_expr)
     | _ -> None
   in
@@ -1266,27 +1287,6 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                  | _ -> None)
              | None -> None)
          | _ -> None)
-  in
-  let provider_key_names_from_expr key_expr =
-    let add_unique key_name key_names =
-      if List.exists (same_name key_name) key_names then key_names
-      else key_name :: key_names
-    in
-    let key_names =
-      match name_from_property_key_expr key_expr with
-      | Some key_name -> [ key_name ]
-      | None -> []
-    in
-    let key_names =
-      match key_expr.G.e with
-      | G.N class_token when is_known_class class_token class_names ->
-          add_unique class_token key_names
-      | _ -> key_names
-    in
-    match name_from_forward_ref_expr key_expr with
-    | Some class_token when is_known_class class_token class_names ->
-        add_unique class_token key_names
-    | _ -> key_names
   in
   let class_name_from_provider_dep_expr dep_expr =
     match
@@ -1461,31 +1461,37 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         :: !object_property_mappings
     in
     let rec record_provider_array_exprs provider_exprs =
+      let record_provider_array_exprs_once provider_exprs =
+        provider_exprs
+        |> List.iter (function
+             | { G.e = G.Record (_, fields, _); _ } ->
+                 record_provider_metadata_object fields
+             | { G.e = G.Container (G.Array, (_, nested_provider_exprs, _)); _ }
+               ->
+                 record_provider_array_exprs nested_provider_exprs
+             | {
+                 G.e =
+                   G.Call
+                     ( { G.e = G.IdSpecial (G.Spread, _); _ },
+                       (_, [ G.Arg provider_expr ], _) );
+                 _;
+               } -> (
+                 match provider_array_exprs_from_expr provider_expr with
+                 | Some provider_exprs -> record_provider_array_exprs provider_exprs
+                 | None -> ())
+             | provider_expr -> (
+                 match provider_array_exprs_from_expr provider_expr with
+                 | Some provider_exprs -> record_provider_array_exprs provider_exprs
+                 | None -> (
+                     match
+                       class_name_from_provider_shorthand_expr provider_expr
+                     with
+                     | Some class_name ->
+                         record_provider_shorthand_class_mapping class_name
+                     | None -> ())))
+      in
       provider_exprs
-      |> List.iter (function
-           | { G.e = G.Record (_, fields, _); _ } ->
-               record_provider_metadata_object fields
-           | { G.e = G.Container (G.Array, (_, nested_provider_exprs, _)); _ }
-             ->
-               record_provider_array_exprs nested_provider_exprs
-           | {
-               G.e =
-                 G.Call
-                   ( { G.e = G.IdSpecial (G.Spread, _); _ },
-                     (_, [ G.Arg provider_expr ], _) );
-               _;
-             } -> (
-               match provider_array_exprs_from_expr provider_expr with
-               | Some provider_exprs -> record_provider_array_exprs provider_exprs
-               | None -> ())
-           | provider_expr -> (
-               match provider_array_exprs_from_expr provider_expr with
-               | Some provider_exprs -> record_provider_array_exprs provider_exprs
-               | None -> (
-                   match class_name_from_provider_shorthand_expr provider_expr with
-                   | Some class_name ->
-                       record_provider_shorthand_class_mapping class_name
-                   | None -> ())))
+      |> List.iter (fun _ -> record_provider_array_exprs_once provider_exprs)
     in
     match expr.G.e with
     | G.Record (_, fields, _) ->

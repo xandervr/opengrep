@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_typescript_provider_forward_alias_metadata
+    message: Taint should flow through TypeScript forward provider alias metadata
+    languages: [typescript]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
