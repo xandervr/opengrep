@@ -69,6 +69,7 @@
 - JavaScript Inversify-style self bindings now resolve `bind(Source).toSelf()` and lifecycle-wrapped `bind(Source).toSelf().inSingletonScope()` class-token providers.
 - TypeScript provider factory dependency metadata now resolves factory providers that return injected dependencies declared through `deps` or `inject`, covering string tokens, class tokens, and Nest-style `inject` arrays.
 - TypeScript named provider factory dependency metadata now resolves `useFactory: makeSource` and `useFactory: selectSource` entries when the named function or const lambda returns one of its injected parameters.
+- TypeScript optional/location DI metadata decorators now trigger typed constructor metadata for `@Optional()`, `@Self()`, `@SkipSelf()`, and `@Host()` without requiring an explicit `@Inject()` key or class-level `@Injectable()` decorator.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
 - JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, dynamic-keyed, dynamic-template-keyed, chained map, container API, provider-binding, provider API alias, provider method alias, provider alias, and registration-map service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
 
@@ -162,6 +163,7 @@
 - `8229205c4` - `fix: resolve toself provider containers` (signed)
 - `3337b2b81` - `fix: resolve typescript provider factory deps` (signed)
 - `5ea01253b` - `fix: resolve typescript named provider factory deps` (signed)
+- `38c821cc7` - `fix: resolve typescript optional metadata injection` (signed)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -185,7 +187,7 @@ The Docker-built help text now says:
     not support taint mode.
 ```
 
-**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, DI-class constructor type metadata, async `getAsync`/`resolveAsync` provider reads, parent-to-child container aliases, provider lifecycle-chain wrappers, provider-object registration arrays, direct `providers: [...]` metadata, provider-list aliases, class-token provider metadata, provider-list spreads, nested provider arrays, provider class shorthand entries, JavaScript provider tuple arrays, two-argument provider spec registrations, TypeScript `forwardRef(() => Class)` wrappers, Inversify-style `toSelf()` providers, TypeScript provider factory dependency metadata, or named TypeScript provider factory dependency metadata. Good next targets are `@Optional()`/multi-decorator TypeScript DI variants, additional library-specific provider APIs, and any tuple-like TypeScript metadata forms that appear in real frameworks. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
+**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, DI-class constructor type metadata, async `getAsync`/`resolveAsync` provider reads, parent-to-child container aliases, provider lifecycle-chain wrappers, provider-object registration arrays, direct `providers: [...]` metadata, provider-list aliases, class-token provider metadata, provider-list spreads, nested provider arrays, provider class shorthand entries, JavaScript provider tuple arrays, two-argument provider spec registrations, TypeScript `forwardRef(() => Class)` wrappers, Inversify-style `toSelf()` providers, TypeScript provider factory dependency metadata, named TypeScript provider factory dependency metadata, or TypeScript optional/location metadata decorators. Good next targets are additional library-specific provider APIs and tuple-like TypeScript metadata forms that appear in real frameworks. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
 
 **Next concrete actions:**
 
@@ -1162,6 +1164,41 @@ jq -r ".errors[]?.message // .errors[]? // empty" /tmp/opengrep-generic-regex/re
 '
 ```
 
+## Latest Session Update: TypeScript Optional Metadata Injection Green
+
+TypeScript DI metadata-only decorators now trigger typed constructor metadata when a decorated parameter is assigned to a field.
+
+- `src/tainting/Object_initialization.ml` now distinguishes key-bearing injection decorators (`@Inject`, `@Autowired`) from metadata-only DI decorators (`@Optional`, `@Self`, `@SkipSelf`, `@Host`), so metadata-only decorators resolve typed parameters without becoming provider keys.
+- `cli/tests/default/e2e/rules/taint_interfile_typescript_optional_metadata_injection.yaml` and `targets/taint_interfile_typescript_optional_metadata_injection/` lock direct optional, field assignment, and multi-decorator location metadata forms.
+- Red Docker proof before the fix found only the direct constructor cases and missed the field assignment case.
+
+Red proof before the fix:
+
+```text
+optional_metadata_red count=2 expected=3 errors=0 interfile_languages="TypeScript"
+rules.taint_interfile_typescript_optional_metadata_injection    targets/taint_interfile_typescript_optional_metadata_injection/multi_location/app.ts    13
+rules.taint_interfile_typescript_optional_metadata_injection    targets/taint_interfile_typescript_optional_metadata_injection/optional_direct/app.ts    9
+```
+
+Current targeted scan:
+
+```text
+optional_metadata_green count=3 expected=3 errors=0 interfile_languages="TypeScript"
+rules.taint_interfile_typescript_optional_metadata_injection    targets/taint_interfile_typescript_optional_metadata_injection/multi_location/app.ts    13
+rules.taint_interfile_typescript_optional_metadata_injection    targets/taint_interfile_typescript_optional_metadata_injection/optional_direct/app.ts    9
+rules.taint_interfile_typescript_optional_metadata_injection    targets/taint_interfile_typescript_optional_metadata_injection/self_field/app.ts    15
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes.
+- Full direct regression matrix passes with `matrix_failures=0`, including `taint_interfile_typescript_optional_metadata_injection count=3`, `taint_interfile_typescript_provider_named_factory_deps_metadata count=3`, `taint_interfile_typescript_provider_factory_deps_metadata count=3`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
+- `git diff --check` passes.
+- Docker `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+- Signed checkpoint pushed: `38c821cc7` - `fix: resolve typescript optional metadata injection`.
+
+Next resume point: continue auditing additional library-specific provider APIs and tuple-like TypeScript metadata forms that appear in real frameworks.
+
 ## Current State Snapshot
 
 Worktree is expected to be clean after the latest pushed checkpoints. Verify with `git status -sb` before resuming.
@@ -1211,6 +1248,7 @@ Verified in this handoff:
 - Focused direct scans passed for JavaScript and TypeScript class-field helper instances where `this.source.getInput()` calls a helper object initialized in a class field.
 - Focused direct scans passed for JavaScript and TypeScript constructor-assigned helper instances where `this.source = new Source()` is assigned in the constructor.
 - Focused direct scans passed for TypeScript constructor parameter properties with typed helper fields.
+- Focused direct scans passed for TypeScript optional/location metadata decorators where `@Optional()`, `@Self()`, `@SkipSelf()`, or `@Host()` mark typed constructor parameters without an explicit provider key.
 - Focused direct scans passed for callback-body-sink syntax across Ruby, Scala, Rust, Swift, Elixir, and Clojure.
 - Focused direct scans passed for untyped JavaScript constructor-parameter helper instances where `this.source = source` and `new App(new Source())` supplies the helper object.
 - Focused direct scans passed for untyped JavaScript constructor-parameter helper aliases where `const helper = new Source(); new App(helper)` supplies the helper object.
@@ -1243,7 +1281,7 @@ Verified in this handoff:
 
 Known boundaries:
 - `generic` and `regex` are extended non-AST analyzers, not parser-backed target languages. Taint mode now rejects them with a structured `SemgrepError` and CLI help documents that they do not support taint mode.
-- Untyped JavaScript constructor-parameter injection for direct constructor calls such as `constructor(source) { this.source = source }` with `new App(new Source())` is now covered. Local helper aliases, simple reassignments, simple factory-returned constructor helpers, factory-local helper aliases, arrow-function factories, simple higher-order factories, callable factory variable aliases, service-container object properties, service-container factory returns, service-container factory aliases, destructured service-container properties, nested service-container property paths, mutated service-container property assignments, spread service-container properties, rest service-container properties, nested mutated service-container aliases, object factory properties, inline object factory properties, object factory property aliases, mutated object factory property aliases, and same-class conditional branch aliases are covered. TypeScript keyless decorator metadata and DI-class constructor type metadata are covered when class type annotations are statically visible. Broader dependency-injection object-shape variants remain unaudited, including metadata without statically visible class types, hierarchical/scoped containers, async providers, framework-specific injection containers, and deeper factory composition.
+- Untyped JavaScript constructor-parameter injection for direct constructor calls such as `constructor(source) { this.source = source }` with `new App(new Source())` is now covered. Local helper aliases, simple reassignments, simple factory-returned constructor helpers, factory-local helper aliases, arrow-function factories, simple higher-order factories, callable factory variable aliases, service-container object properties, service-container factory returns, service-container factory aliases, destructured service-container properties, nested service-container property paths, mutated service-container property assignments, spread service-container properties, rest service-container properties, nested mutated service-container aliases, object factory properties, inline object factory properties, object factory property aliases, mutated object factory property aliases, and same-class conditional branch aliases are covered. TypeScript keyless decorator metadata, DI-class constructor type metadata, optional/location constructor metadata, static provider metadata, provider aliases, async providers, hierarchical providers, lifecycle providers, provider-object arrays, provider tuples/specs, forward refs, toSelf bindings, and factory dependency metadata are covered when class type annotations or modeled provider metadata are statically visible. Broader dependency-injection object-shape variants remain unaudited, including runtime/reflection-only metadata without statically visible class types, additional library-specific provider APIs outside the modeled shapes, and deeper dynamic factory/container composition.
 - PHP callback-body-sink syntax remains blocked by parser/AST lowering for anonymous and arrow functions: current dumps drop lambda parameters and sink call arguments, so the taint engine cannot follow the callback argument into `sink($value)`. PHP callback-return syntax remains covered.
 - Do not claim full Semgrep Pro parity until a requirement-by-requirement audit proves it.
 
