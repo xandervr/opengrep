@@ -1075,6 +1075,33 @@ def test_interfile_taint_flows_through_javascript_provider_alias_containers(
 
 
 @pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_async_provider_containers(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_async_provider_container.yaml",
+        target_name="taint_interfile_async_provider_container",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = sorted(output["results"], key=lambda result: result["path"])
+
+    assert output["interfile_languages_used"] == ["JavaScript", "TypeScript"]
+    assert len(results) == 3
+    assert all(
+        result["check_id"] == "rules.taint_interfile_async_provider_container"
+        for result in results
+    )
+    assert [result["path"] for result in results] == [
+        "targets/taint_interfile_async_provider_container/get_async/app.js",
+        "targets/taint_interfile_async_provider_container/resolve_async/app.js",
+        "targets/taint_interfile_async_provider_container/typescript/app.ts",
+    ]
+    assert [result["start"]["line"] for result in results] == [9, 9, 11]
+
+
+@pytest.mark.kinda_slow
 def test_interfile_taint_flows_through_javascript_service_container_factories(
     run_semgrep_in_tmp: RunSemgrep,
 ):

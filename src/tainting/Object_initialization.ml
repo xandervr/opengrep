@@ -378,7 +378,8 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | _ -> false
   in
   let is_object_property_get_method_name =
-    method_name_matches [ "get"; "resolve"; "lookup" ]
+    method_name_matches
+      [ "get"; "getAsync"; "resolve"; "resolveAsync"; "lookup" ]
   in
   let is_object_property_set_method_name =
     method_name_matches [ "set"; "register"; "bind"; "provide" ]
@@ -700,21 +701,24 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | None -> ())
   in
   let rec class_name_from_expr expr =
-    match extract_class_name_from_constructor expr lang class_names with
-    | Some _ as class_name -> class_name
-    | None -> (
-        match class_name_from_object_mapping expr with
+    match expr.G.e with
+    | G.Await (_, awaited_expr) -> class_name_from_expr awaited_expr
+    | _ -> (
+        match extract_class_name_from_constructor expr lang class_names with
         | Some _ as class_name -> class_name
         | None -> (
-            match class_name_from_object_property_mapping expr with
+            match class_name_from_object_mapping expr with
             | Some _ as class_name -> class_name
             | None -> (
-                match value_expr_from_chained_object_property_get expr with
-                | Some value_expr -> class_name_from_expr value_expr
+                match class_name_from_object_property_mapping expr with
+                | Some _ as class_name -> class_name
                 | None -> (
-                    match class_name_from_function_return expr with
-                    | Some _ as class_name -> class_name
-                    | None -> class_name_from_conditional_expr expr))))
+                    match value_expr_from_chained_object_property_get expr with
+                    | Some value_expr -> class_name_from_expr value_expr
+                    | None -> (
+                        match class_name_from_function_return expr with
+                        | Some _ as class_name -> class_name
+                        | None -> class_name_from_conditional_expr expr)))))
   and class_name_from_conditional_expr expr =
     match expr.G.e with
     | G.Conditional (_condition, then_expr, else_expr) -> (
@@ -1262,15 +1266,18 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     let local_object_mappings = ref [] in
     let local_object_property_mappings = ref [] in
     let rec class_name_from_return_expr expr =
-      match extract_class_name_from_constructor expr lang class_names with
-      | Some _ as class_name -> class_name
-      | None -> (
-          match name_from_mapping local_object_mappings expr with
+      match expr.G.e with
+      | G.Await (_, awaited_expr) -> class_name_from_return_expr awaited_expr
+      | _ -> (
+          match extract_class_name_from_constructor expr lang class_names with
           | Some _ as class_name -> class_name
           | None -> (
-              match class_name_from_function_return expr with
+              match name_from_mapping local_object_mappings expr with
               | Some _ as class_name -> class_name
-              | None -> class_name_from_return_conditional_expr expr))
+              | None -> (
+                  match class_name_from_function_return expr with
+                  | Some _ as class_name -> class_name
+                  | None -> class_name_from_return_conditional_expr expr)))
     and class_name_from_return_conditional_expr expr =
       match expr.G.e with
       | G.Conditional (_condition, then_expr, else_expr) -> (
