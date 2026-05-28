@@ -264,16 +264,34 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     List.length path1 = List.length path2
     && List.for_all2 same_resolved_name path1 path2
   in
-  let rec object_property_path_from_expr expr =
+  let name_from_static_property_expr expr =
     match expr.G.e with
-    | G.DotAccess (obj_expr, _, G.FN field_name) -> (
-        match object_property_path_from_expr obj_expr with
-        | Some (obj_name, field_path) ->
-            Some (obj_name, field_path @ [ field_name ])
-        | None -> (
-            match obj_expr.G.e with
-            | G.N obj_name -> Some (obj_name, [ field_name ])
-            | _ -> None))
+    | G.L (G.String (_, (field_name, tok), _)) ->
+        Some (G.Id ((field_name, tok), G.empty_id_info ()))
+    | _ -> None
+  in
+  let field_name_from_entity entity =
+    match entity.G.name with
+    | G.EN field_name -> Some field_name
+    | G.EDynamic field_expr -> name_from_static_property_expr field_expr
+    | _ -> None
+  in
+  let rec object_property_path_from_expr expr =
+    let object_property_path_from_base obj_expr field_name =
+      match object_property_path_from_expr obj_expr with
+      | Some (obj_name, field_path) -> Some (obj_name, field_path @ [ field_name ])
+      | None -> (
+          match obj_expr.G.e with
+          | G.N obj_name -> Some (obj_name, [ field_name ])
+          | _ -> None)
+    in
+    match expr.G.e with
+    | G.DotAccess (obj_expr, _, G.FN field_name) ->
+        object_property_path_from_base obj_expr field_name
+    | G.ArrayAccess (obj_expr, (_, field_expr, _)) -> (
+        match name_from_static_property_expr field_expr with
+        | Some field_name -> object_property_path_from_base obj_expr field_name
+        | None -> None)
     | _ -> None
   in
   let class_name_from_object_mapping expr =
@@ -573,8 +591,8 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                          G.FieldDefColon { G.vinit = Some field_init; _ } );
                    _;
                  } -> (
-                 match field_entity.G.name with
-                 | G.EN field_name -> (
+                 match field_name_from_entity field_entity with
+                 | Some field_name -> (
                      let field_path = field_path @ [ field_name ] in
                      match class_name_from_expr field_init with
                      | Some class_name ->
@@ -752,9 +770,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                            G.FieldDefColon { G.vinit = _; _ } );
                      _;
                    } -> (
-                   match field_entity.G.name with
-                   | G.EN field_name -> Some field_name
-                   | _ -> None)
+                   field_name_from_entity field_entity)
                | _ -> None)
         in
         fields
@@ -767,8 +783,8 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                          G.FieldDefColon { G.vinit = field_init; _ } );
                    _;
                  } -> (
-                 match field_entity.G.name with
-                 | G.EN field_name -> (
+                 match field_name_from_entity field_entity with
+                 | Some field_name -> (
                      match
                        ( local_name_from_field_init field_name field_init,
                          class_name_from_source_object_property source_expr
@@ -843,8 +859,8 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                        G.FieldDefColon { G.vinit = Some field_init; _ } );
                  _;
                } -> (
-               match field_entity.G.name with
-               | G.EN field_name ->
+               match field_name_from_entity field_entity with
+               | Some field_name ->
                    let field_path = field_path @ [ field_name ] in
                    (match class_name_from_return_expr field_init with
                    | Some class_name ->
@@ -912,8 +928,8 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                              G.FieldDefColon { G.vinit = Some field_init; _ } );
                        _;
                      } -> (
-                     match field_entity.G.name with
-                     | G.EN field_name ->
+                     match field_name_from_entity field_entity with
+                     | Some field_name ->
                          let field_path = field_path @ [ field_name ] in
                          (match class_name_from_return_expr field_init with
                          | Some class_name ->
