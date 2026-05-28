@@ -1137,6 +1137,63 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           | None -> ())
       | _ -> ()
     in
+    let field_init_named names fields =
+      fields
+      |> List.find_map (function
+           | G.F
+               {
+                 G.s =
+                   G.DefStmt
+                     ( field_entity,
+                       G.FieldDefColon { G.vinit = Some field_init; _ } );
+                 _;
+               } -> (
+               match field_name_from_entity field_entity with
+               | Some field_name when method_name_matches names field_name ->
+                   Some field_init
+               | _ -> None)
+           | _ -> None)
+    in
+    let provider_field_entry fields =
+      fields
+      |> List.find_map (function
+           | G.F
+               {
+                 G.s =
+                   G.DefStmt
+                     ( field_entity,
+                       G.FieldDefColon { G.vinit = Some provider_expr; _ } );
+                 _;
+               } -> (
+               match field_name_from_entity field_entity with
+               | Some field_name -> (
+                   match method_name_string field_name with
+                   | Some provider_method_name
+                     when is_object_property_provider_method_name field_name ->
+                       Some (provider_method_name, provider_expr)
+                   | _ -> None)
+               | None -> None)
+           | _ -> None)
+    in
+    let record_provider_object obj_expr fields =
+      match
+        ( field_init_named [ "provide"; "token"; "name" ] fields,
+          provider_field_entry fields )
+      with
+      | Some key_expr, Some (provider_method_name, provider_expr) -> (
+          match
+            ( name_from_property_key_expr key_expr,
+              class_name_from_provider_expr provider_method_name provider_expr )
+          with
+          | Some field_name, Some class_name -> (
+              match object_property_path_from_base obj_expr field_name with
+              | Some (obj_name, field_path) ->
+                  record_object_property_class_mapping obj_name field_path
+                    class_name
+              | None -> ())
+          | _ -> ())
+      | _ -> ()
+    in
     match expr.G.e with
     | G.Call
         ( { e = G.DotAccess (obj_expr, _, G.FN method_name); _ },
@@ -1153,6 +1210,16 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                    _;
                  } ->
                  record_registration_field obj_expr field_entity provider_spec_expr
+             | _ -> ())
+    | G.Call
+        ( { e = G.DotAccess (obj_expr, _, G.FN method_name); _ },
+          (_, [ G.Arg { e = G.Container (G.Array, (_, provider_exprs, _)); _ } ], _)
+        )
+      when method_name_matches [ "register" ] method_name ->
+        provider_exprs
+        |> List.iter (function
+             | { G.e = G.Record (_, fields, _); _ } ->
+                 record_provider_object obj_expr fields
              | _ -> ())
     | _ -> ()
   in
