@@ -269,11 +269,50 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let name_from_static_string_value value =
     G.Id ((value, Tok.unsafe_fake_tok value), G.empty_id_info ())
   in
-  let name_from_dynamic_property_key_name = function
+  let dynamic_property_key_name_component = function
     | G.Id ((name, _), id_info) ->
-        let dynamic_name = "__opengrep_dynamic_key:" ^ name in
-        Some (G.Id ((dynamic_name, Tok.unsafe_fake_tok dynamic_name), id_info))
+        let sid_suffix =
+          match !(id_info.G.id_resolved) with
+          | Some (_, sid) when not (G.SId.is_unsafe_default sid) ->
+              ":" ^ G.SId.show sid
+          | _ -> ""
+        in
+        Some ("var:" ^ String.escaped name ^ sid_suffix)
     | _ -> None
+  in
+  let name_from_dynamic_property_key_name = function
+    | (G.Id ((_, _), id_info) as key_name) -> (
+        match dynamic_property_key_name_component key_name with
+        | Some component ->
+            let dynamic_name = "__opengrep_dynamic_key:" ^ component in
+            Some (G.Id ((dynamic_name, Tok.unsafe_fake_tok dynamic_name), id_info))
+        | None -> None)
+    | _ -> None
+  in
+  let rec dynamic_property_key_expr_component expr =
+    match expr.G.e with
+    | G.L (G.String (_, (part, _), _)) -> Some ("str:" ^ String.escaped part)
+    | G.N key_name -> dynamic_property_key_name_component key_name
+    | G.Call
+        ( { e = G.IdSpecial (G.InterpolatedElement, _); _ },
+          (_, [ G.Arg inner_expr ], _) ) ->
+        dynamic_property_key_expr_component inner_expr
+    | G.Call ({ e = G.IdSpecial (G.Op G.Plus, _); _ }, (_, args, _))
+    | G.Call ({ e = G.IdSpecial (G.ConcatString _, _); _ }, (_, args, _)) ->
+        dynamic_property_key_args_component args
+    | _ -> None
+  and dynamic_property_key_args_component args =
+    let rec parts = function
+      | [] -> Some []
+      | G.Arg arg_expr :: rest -> (
+          match (dynamic_property_key_expr_component arg_expr, parts rest) with
+          | Some part, Some rest -> Some (part :: rest)
+          | _ -> None)
+      | _ -> None
+    in
+    match parts args with
+    | Some parts -> Some ("expr:" ^ String.concat "|" parts)
+    | None -> None
   in
   let rec name_from_static_string_expr expr =
     match expr.G.e with
@@ -308,7 +347,15 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let name_from_dynamic_property_key_expr expr =
     match expr.G.e with
     | G.N key_name -> name_from_dynamic_property_key_name key_name
-    | _ -> None
+    | _ -> (
+        match dynamic_property_key_expr_component expr with
+        | Some component ->
+            let dynamic_name = "__opengrep_dynamic_expr:" ^ component in
+            Some
+              (G.Id
+                 ((dynamic_name, Tok.unsafe_fake_tok dynamic_name),
+                  G.empty_id_info ()))
+        | None -> None)
   in
   let name_from_property_key_expr expr =
     match name_from_static_string_expr expr with
