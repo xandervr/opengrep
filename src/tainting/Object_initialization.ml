@@ -289,13 +289,6 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         |> Option.map (fun (_obj_name, _field_path, class_name) -> class_name)
     | None -> None
   in
-  let class_name_from_object_property_name obj_name field_name =
-    !object_property_mappings
-    |> List.find_opt (fun (mapped_obj, mapped_path, _class_name) ->
-           same_resolved_name obj_name mapped_obj
-           && same_resolved_path [ field_name ] mapped_path)
-    |> Option.map (fun (_obj_name, _field_path, class_name) -> class_name)
-  in
   let class_name_from_direct_object_property_factory obj_name field_path =
     !object_property_factory_return_mappings
     |> List.find_opt (fun (mapped_obj, mapped_path, _class_name) ->
@@ -706,19 +699,47 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           List.exists (same_resolved_name field_name) excluded_fields
       | [] -> false
     in
-    let copy_rest_properties obj_name rest_name excluded_fields =
-      !object_property_mappings
-      |> List.iter (fun (mapped_obj, mapped_path, class_name) ->
-             if
-               same_resolved_name obj_name mapped_obj
-               && not (top_level_field_in excluded_fields mapped_path)
-             then
+    let object_property_entries_from_expr source_expr =
+      match source_expr.G.e with
+      | G.N obj_name ->
+          !object_property_mappings
+          |> List.filter_map
+               (fun (mapped_obj, mapped_path, class_name) ->
+                 if same_resolved_name obj_name mapped_obj then
+                   Some (mapped_path, class_name)
+                 else None)
+      | G.Call (callee_expr, _) ->
+          let returned_property_func_names =
+            returned_object_property_function_names_from_callee callee_expr
+          in
+          !function_return_object_property_mappings
+          |> List.filter_map
+               (fun (mapped_func_name, mapped_path, class_name) ->
+                 if
+                   List.exists
+                     (fun func_name ->
+                       same_resolved_name func_name mapped_func_name)
+                     returned_property_func_names
+                 then Some (mapped_path, class_name)
+                 else None)
+      | _ -> []
+    in
+    let class_name_from_source_object_property source_expr field_name =
+      object_property_entries_from_expr source_expr
+      |> List.find_opt (fun (mapped_path, _class_name) ->
+             same_resolved_path [ field_name ] mapped_path)
+      |> Option.map snd
+    in
+    let copy_rest_properties source_expr rest_name excluded_fields =
+      object_property_entries_from_expr source_expr
+      |> List.iter (fun (mapped_path, class_name) ->
+             if not (top_level_field_in excluded_fields mapped_path) then
                object_property_mappings :=
                  (rest_name, mapped_path, class_name)
                  :: !object_property_mappings)
     in
     match init_expr.G.e with
-    | G.Assign ({ e = G.Record (_, fields, _); _ }, _, { e = G.N obj_name; _ })
+    | G.Assign ({ e = G.Record (_, fields, _); _ }, _, source_expr)
       ->
         let destructured_fields =
           fields
@@ -750,7 +771,8 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                  | G.EN field_name -> (
                      match
                        ( local_name_from_field_init field_name field_init,
-                         class_name_from_object_property_name obj_name field_name
+                         class_name_from_source_object_property source_expr
+                           field_name
                        )
                      with
                      | Some local_name, Some class_name ->
@@ -774,7 +796,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                          _ );
                    _;
                  } ->
-                 copy_rest_properties obj_name rest_name destructured_fields
+                 copy_rest_properties source_expr rest_name destructured_fields
              | _ -> ())
     | _ -> ()
   in
