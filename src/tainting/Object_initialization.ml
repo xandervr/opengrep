@@ -207,6 +207,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let object_property_alias_mappings = ref [] in
   let constructor_param_field_mappings = ref [] in
   let function_return_mappings = ref [] in
+  let function_return_object_property_mappings = ref [] in
   let function_alias_mappings = ref [] in
   let object_property_factory_return_mappings = ref [] in
   let object_property_function_mappings = ref [] in
@@ -506,6 +507,14 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   in
   let record_object_property_mappings obj_name init_expr =
     match init_expr.G.e with
+    | G.Call ({ G.e = G.N func_name; _ }, _) ->
+        !function_return_object_property_mappings
+        |> List.iter
+             (fun (mapped_func_name, mapped_path, class_name) ->
+               if same_resolved_name func_name mapped_func_name then
+                 object_property_mappings :=
+                   (obj_name, mapped_path, class_name)
+                   :: !object_property_mappings)
     | G.Record (_, fields, _) ->
         let copy_spread_properties source_name =
           !object_property_mappings
@@ -726,6 +735,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   in
   let record_function_return_mapping func_name fdef =
     let local_object_mappings = ref [] in
+    let local_object_property_mappings = ref [] in
     let rec class_name_from_return_expr expr =
       match extract_class_name_from_constructor expr lang class_names with
       | Some _ as class_name -> class_name
@@ -755,6 +765,79 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           local_object_mappings := (var_name, class_name) :: !local_object_mappings
       | None -> ()
     in
+    let rec record_returned_record_fields field_path fields =
+      fields
+      |> List.iter (function
+           | G.F
+               {
+                 G.s =
+                   G.DefStmt
+                     ( field_entity,
+                       G.FieldDefColon { G.vinit = Some field_init; _ } );
+                 _;
+               } -> (
+               match field_entity.G.name with
+               | G.EN field_name ->
+                   let field_path = field_path @ [ field_name ] in
+                   (match class_name_from_return_expr field_init with
+                   | Some class_name ->
+                       function_return_object_property_mappings :=
+                         (func_name, field_path, class_name)
+                         :: !function_return_object_property_mappings
+                   | None -> ());
+                   (match field_init.G.e with
+                   | G.Record (_, nested_fields, _) ->
+                       record_returned_record_fields field_path nested_fields
+                   | _ -> ())
+               | _ -> ())
+           | _ -> ())
+    in
+    let record_returned_object_properties return_expr =
+      match return_expr.G.e with
+      | G.Record (_, fields, _) -> record_returned_record_fields [] fields
+      | G.N local_name ->
+          !local_object_property_mappings
+          |> List.iter
+               (fun (mapped_local_name, mapped_path, class_name) ->
+                 if same_resolved_name local_name mapped_local_name then
+                   function_return_object_property_mappings :=
+                     (func_name, mapped_path, class_name)
+                     :: !function_return_object_property_mappings)
+      | _ -> ()
+    in
+    let record_local_object_property_mappings var_name init_expr =
+      match init_expr.G.e with
+      | G.Record (_, fields, _) ->
+          let rec record_fields field_path fields =
+            fields
+            |> List.iter (function
+                 | G.F
+                     {
+                       G.s =
+                         G.DefStmt
+                           ( field_entity,
+                             G.FieldDefColon { G.vinit = Some field_init; _ } );
+                       _;
+                     } -> (
+                     match field_entity.G.name with
+                     | G.EN field_name ->
+                         let field_path = field_path @ [ field_name ] in
+                         (match class_name_from_return_expr field_init with
+                         | Some class_name ->
+                             local_object_property_mappings :=
+                               (var_name, field_path, class_name)
+                               :: !local_object_property_mappings
+                         | None -> ());
+                         (match field_init.G.e with
+                         | G.Record (_, nested_fields, _) ->
+                             record_fields field_path nested_fields
+                         | _ -> ())
+                     | _ -> ())
+                 | _ -> ())
+          in
+          record_fields [] fields
+      | _ -> ()
+    in
     let visitor =
       object
         inherit [_] G.iter as super
@@ -763,11 +846,14 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           (match stmt.G.s with
           | G.DefStmt (entity, G.VarDef { G.vinit = Some init_expr; _ }) -> (
               match entity.G.name with
-              | G.EN var_name -> record_local_object_mapping var_name init_expr
+              | G.EN var_name ->
+                  record_local_object_mapping var_name init_expr;
+                  record_local_object_property_mappings var_name init_expr
               | _ -> ())
           | G.ExprStmt ({ G.e = G.Assign ({ G.e = G.N var_name; _ }, _, rval_expr); _ }, _) ->
               record_local_object_mapping var_name rval_expr
           | G.Return (_, Some return_expr, _) -> (
+              record_returned_object_properties return_expr;
               match class_name_from_return_expr return_expr with
               | Some class_name ->
                   function_return_mappings :=
