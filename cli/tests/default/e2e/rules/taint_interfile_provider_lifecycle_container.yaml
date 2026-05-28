@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_provider_lifecycle_container
+    message: Taint should flow through lifecycle-scoped JavaScript provider containers
+    languages: [js]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

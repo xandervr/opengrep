@@ -390,6 +390,13 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         "useFactory"; "asClass"; "asValue"; "asFunction"; "useExisting";
         "toService"; "aliasTo" ]
   in
+  let is_object_property_provider_lifecycle_method_name =
+    method_name_matches
+      [ "inSingletonScope"; "inTransientScope"; "inRequestScope"; "singleton";
+        "transient"; "scoped"; "proxy"; "classic"; "when"; "whenTargetNamed";
+        "whenTargetTagged"; "whenInjectedInto"; "whenAnyAncestorIs";
+        "whenNoAncestorIs" ]
+  in
   let is_object_child_container_method_name =
     method_name_matches
       [ "createChild"; "createChildContainer"; "createScope";
@@ -468,7 +475,18 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         | _ -> None)
     | _ -> None
   in
+  let rec unwrap_provider_lifecycle_expr expr =
+    match expr.G.e with
+    | G.Call
+        ( { e = G.DotAccess (provider_expr, _, G.FN lifecycle_method_name); _ },
+          _ )
+      when is_object_property_provider_lifecycle_method_name
+             lifecycle_method_name ->
+        unwrap_provider_lifecycle_expr provider_expr
+    | _ -> expr
+  in
   let object_property_provider_call_from_expr expr =
+    let expr = unwrap_provider_lifecycle_expr expr in
     match expr.G.e with
     | G.Call
         ( { e = G.DotAccess (bind_expr, _, G.FN provider_method_name); _ },
@@ -1048,6 +1066,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | _ -> None
   in
   let class_name_from_provider_spec_expr expr =
+    let expr = unwrap_provider_lifecycle_expr expr in
     match expr.G.e with
     | G.Call ({ e = G.N provider_name; _ }, (_, [ G.Arg provider_expr ], _)) -> (
         match method_name_string provider_name with
