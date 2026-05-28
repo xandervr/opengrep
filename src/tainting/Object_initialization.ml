@@ -441,15 +441,20 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let is_inject_attribute_name =
     method_name_matches [ "Inject"; "Autowired" ]
   in
+  let is_dependency_metadata_attribute_name =
+    method_name_matches
+      [ "Inject"; "Autowired"; "Optional"; "Self"; "SkipSelf"; "Host" ]
+  in
   let is_injectable_attribute_name =
     method_name_matches
       [ "Injectable"; "Component"; "Controller"; "Service"; "Directive";
         "Resolver" ]
   in
-  let has_inject_attribute attrs =
+  let has_dependency_metadata_attribute attrs =
     attrs
     |> List.exists (function
-         | G.NamedAttr (_, attr_name, _) -> is_inject_attribute_name attr_name
+         | G.NamedAttr (_, attr_name, _) ->
+             is_dependency_metadata_attribute_name attr_name
          | _ -> false)
   in
   let has_injectable_attribute attrs =
@@ -865,7 +870,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                  pinfo;
                  _;
                }
-             when (has_inject_attribute pattrs
+             when (has_dependency_metadata_attribute pattrs
                   || use_typed_constructor_metadata)
                   && Option.is_none (injected_key_from_attrs pattrs) -> (
                match class_name_from_type param_type with
@@ -1570,7 +1575,8 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     match (entity.G.name, injected_key_from_attrs entity.G.attrs) with
     | G.EN field_name, Some injected_key ->
         record_injected_field_mapping field_name injected_key
-    | G.EN field_name, None when has_inject_attribute entity.G.attrs -> (
+    | G.EN field_name, None when has_dependency_metadata_attribute entity.G.attrs
+      -> (
         match vtype with
         | Some field_type -> (
             match class_name_from_type field_type with
