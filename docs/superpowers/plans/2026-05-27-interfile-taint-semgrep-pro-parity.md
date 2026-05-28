@@ -72,6 +72,8 @@
 - TypeScript optional/location DI metadata decorators now trigger typed constructor metadata for `@Optional()`, `@Self()`, `@SkipSelf()`, and `@Host()` without requiring an explicit `@Inject()` key or class-level `@Injectable()` decorator.
 - TypeScript environment provider metadata now resolves provider arrays wrapped by `makeEnvironmentProviders(...)`, including direct, named, and imported wrapper values.
 - TypeScript forward provider aliases now resolve `useExisting: forwardRef(() => Token)` provider metadata through later token bindings, including direct, forward-ordered, and imported provider arrays.
+- TypeScript registry decorator metadata now resolves TSyringe-style `@registry([...])` provider arrays consumed by lowercase `@inject(...)` constructor parameters, covering `useClass`, `useFactory`, and `useValue` providers.
+- JavaScript provider spec registration coverage now includes object provider specs passed as `register("key", { useClass/useFactory/useValue: ... })`.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
 - JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, dynamic-keyed, dynamic-template-keyed, chained map, container API, provider-binding, provider API alias, provider method alias, provider alias, and registration-map service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
 
@@ -168,6 +170,7 @@
 - `38c821cc7` - `fix: resolve typescript optional metadata injection` (signed)
 - `caabeef2b` - `fix: resolve typescript environment providers` (signed)
 - `41227c142` - `fix: resolve typescript forward provider aliases` (signed)
+- `22182d551` - `fix: resolve typescript registry provider metadata` (signed)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -191,7 +194,7 @@ The Docker-built help text now says:
     not support taint mode.
 ```
 
-**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, DI-class constructor type metadata, async `getAsync`/`resolveAsync` provider reads, parent-to-child container aliases, provider lifecycle-chain wrappers, provider-object registration arrays, direct `providers: [...]` metadata, provider-list aliases, class-token provider metadata, provider-list spreads, nested provider arrays, provider class shorthand entries, JavaScript provider tuple arrays, two-argument provider spec registrations, TypeScript `forwardRef(() => Class)` wrappers, Inversify-style `toSelf()` providers, TypeScript provider factory dependency metadata, named TypeScript provider factory dependency metadata, TypeScript optional/location metadata decorators, TypeScript environment-provider wrappers, or TypeScript forward provider aliases. Good next targets are additional library-specific provider APIs and tuple-like TypeScript metadata forms that appear in real frameworks. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
+**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, DI-class constructor type metadata, async `getAsync`/`resolveAsync` provider reads, parent-to-child container aliases, provider lifecycle-chain wrappers, provider-object registration arrays, direct `providers: [...]` metadata, provider-list aliases, class-token provider metadata, provider-list spreads, nested provider arrays, provider class shorthand entries, JavaScript provider tuple arrays, two-argument provider spec registrations, TypeScript `forwardRef(() => Class)` wrappers, Inversify-style `toSelf()` providers, TypeScript provider factory dependency metadata, named TypeScript provider factory dependency metadata, TypeScript optional/location metadata decorators, TypeScript environment-provider wrappers, TypeScript forward provider aliases, or TSyringe-style registry decorator metadata. Good next targets are additional library-specific provider APIs, multi-provider collection injection forms, and tuple-like TypeScript metadata forms that appear in real frameworks. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
 
 **Next concrete actions:**
 
@@ -1167,6 +1170,43 @@ printf "regex_taint results=%s errors=%s\n" "$(jq -r ".results|length" /tmp/open
 jq -r ".errors[]?.message // .errors[]? // empty" /tmp/opengrep-generic-regex/regex.json
 '
 ```
+
+## Latest Session Update: TypeScript Registry Provider Metadata Green
+
+TypeScript provider metadata now resolves TSyringe-style registry decorator arrays and lowercase constructor injection decorators.
+
+- `src/tainting/Object_initialization.ml` recognizes lowercase `@inject(...)` as an explicit injection decorator.
+- Decorator metadata can now consume direct provider arrays such as `@registry([{ token: "source", useClass: Source }])`.
+- Direct decorator arrays intentionally disable shorthand class-provider handling so arbitrary non-provider decorators with class arrays are not treated as provider metadata.
+- `cli/tests/default/e2e/rules/taint_interfile_typescript_registry_metadata.yaml` and `targets/taint_interfile_typescript_registry_metadata/` cover `useClass`, `useFactory`, and `useValue` registry providers.
+- Existing JavaScript two-argument provider registration coverage now also includes object provider specs passed as `register("source", { useClass/useFactory/useValue: ... })`.
+
+Red proof before the fix:
+
+```text
+registry_metadata_red count=0 expected=3 errors=0 interfile_languages=["TypeScript"]
+```
+
+Current targeted scans:
+
+```text
+registry_metadata_green count=3 expected=3 errors=0 interfile_languages=["TypeScript"]
+rules.taint_interfile_typescript_registry_metadata    targets/taint_interfile_typescript_registry_metadata/class_provider/app.ts    18
+rules.taint_interfile_typescript_registry_metadata    targets/taint_interfile_typescript_registry_metadata/factory_provider/app.ts    18
+rules.taint_interfile_typescript_registry_metadata    targets/taint_interfile_typescript_registry_metadata/value_provider/app.ts    18
+
+provider_spec_registration_count=6 expected=6 errors=0
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes.
+- Full direct regression matrix passes with `matrix_failures=0`, including `taint_interfile_typescript_registry_metadata count=3`, `taint_interfile_provider_spec_registration_container count=6`, `taint_interfile_typescript_provider_forward_alias_metadata count=3`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
+- `git diff --check` passes.
+- Docker `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+- Signed checkpoint pushed: `22182d551` - `fix: resolve typescript registry provider metadata`.
+
+Next resume point: continue auditing additional library-specific provider APIs, multi-provider collection injection forms, and tuple-like TypeScript metadata forms that appear in real frameworks.
 
 ## Latest Session Update: TypeScript Forward Provider Aliases Green
 
