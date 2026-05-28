@@ -1226,7 +1226,7 @@ def test_interfile_taint_flows_through_provider_spec_registration_containers(
     results = sorted(output["results"], key=lambda result: result["path"])
 
     assert output["interfile_languages_used"] == ["JavaScript"]
-    assert len(results) == 3
+    assert len(results) == 6
     assert all(
         result["check_id"]
         == "rules.taint_interfile_provider_spec_registration_container"
@@ -1235,9 +1235,12 @@ def test_interfile_taint_flows_through_provider_spec_registration_containers(
     assert [result["path"] for result in results] == [
         "targets/taint_interfile_provider_spec_registration_container/register_class/app.js",
         "targets/taint_interfile_provider_spec_registration_container/register_factory/app.js",
+        "targets/taint_interfile_provider_spec_registration_container/register_object_class/app.js",
+        "targets/taint_interfile_provider_spec_registration_container/register_object_factory/app.js",
+        "targets/taint_interfile_provider_spec_registration_container/register_object_value/app.js",
         "targets/taint_interfile_provider_spec_registration_container/register_value/app.js",
     ]
-    assert [result["start"]["line"] for result in results] == [9, 9, 9]
+    assert [result["start"]["line"] for result in results] == [9, 9, 9, 9, 9, 9]
 
 
 @pytest.mark.kinda_slow
@@ -1573,6 +1576,34 @@ def test_interfile_taint_flows_through_typescript_provider_environment_metadata(
         "targets/taint_interfile_typescript_provider_environment_metadata/named_environment/app.ts",
     ]
     assert [result["start"]["line"] for result in results] == [15, 11, 19]
+
+
+@pytest.mark.kinda_slow
+def test_interfile_taint_flows_through_typescript_registry_metadata(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    stdout, _stderr = run_semgrep_in_tmp(
+        "rules/taint_interfile_typescript_registry_metadata.yaml",
+        target_name="taint_interfile_typescript_registry_metadata",
+        output_format=OutputFormat.JSON,
+    )
+
+    output = json.loads(stdout)
+    results = sorted(output["results"], key=lambda result: result["path"])
+
+    assert output["interfile_languages_used"] == ["TypeScript"]
+    assert len(results) == 3
+    assert all(
+        result["check_id"]
+        == "rules.taint_interfile_typescript_registry_metadata"
+        for result in results
+    )
+    assert [result["path"] for result in results] == [
+        "targets/taint_interfile_typescript_registry_metadata/class_provider/app.ts",
+        "targets/taint_interfile_typescript_registry_metadata/factory_provider/app.ts",
+        "targets/taint_interfile_typescript_registry_metadata/value_provider/app.ts",
+    ]
+    assert [result["start"]["line"] for result in results] == [18, 18, 18]
 
 
 @pytest.mark.kinda_slow

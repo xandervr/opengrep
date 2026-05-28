@@ -439,7 +439,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         "createRequestScope" ]
   in
   let is_inject_attribute_name =
-    method_name_matches [ "Inject"; "Autowired" ]
+    method_name_matches [ "Inject"; "inject"; "Autowired" ]
   in
   let is_dependency_metadata_attribute_name =
     method_name_matches
@@ -1460,7 +1460,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           class_name )
         :: !object_property_mappings
     in
-    let rec record_provider_array_exprs provider_exprs =
+    let rec record_provider_array_exprs ?(allow_shorthand = true) provider_exprs =
       let record_provider_array_exprs_once provider_exprs =
         provider_exprs
         |> List.iter (function
@@ -1468,7 +1468,8 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                  record_provider_metadata_object fields
              | { G.e = G.Container (G.Array, (_, nested_provider_exprs, _)); _ }
                ->
-                 record_provider_array_exprs nested_provider_exprs
+                 record_provider_array_exprs ~allow_shorthand
+                   nested_provider_exprs
              | {
                  G.e =
                    G.Call
@@ -1477,23 +1478,28 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                  _;
                } -> (
                  match provider_array_exprs_from_expr provider_expr with
-                 | Some provider_exprs -> record_provider_array_exprs provider_exprs
+                 | Some provider_exprs ->
+                     record_provider_array_exprs ~allow_shorthand provider_exprs
                  | None -> ())
              | provider_expr -> (
                  match provider_array_exprs_from_expr provider_expr with
-                 | Some provider_exprs -> record_provider_array_exprs provider_exprs
+                 | Some provider_exprs ->
+                     record_provider_array_exprs ~allow_shorthand provider_exprs
                  | None -> (
                      match
                        class_name_from_provider_shorthand_expr provider_expr
                      with
-                     | Some class_name ->
+                     | Some class_name when allow_shorthand ->
                          record_provider_shorthand_class_mapping class_name
+                     | Some _ -> ()
                      | None -> ())))
       in
       provider_exprs
       |> List.iter (fun _ -> record_provider_array_exprs_once provider_exprs)
     in
     match expr.G.e with
+    | G.Container (G.Array, (_, provider_exprs, _)) ->
+        record_provider_array_exprs ~allow_shorthand:false provider_exprs
     | G.Record (_, fields, _) ->
         fields
         |> List.iter (function
