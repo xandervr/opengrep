@@ -45,6 +45,7 @@
 - TypeScript constructor parameter properties now resolve when a typed parameter property such as `constructor(private source: Source)` is later used through `this.source.getInput()`.
 - TypeScript decorated property injection now resolves when a static provider binding such as `container.bind("source").to(Source)` is consumed through an untyped `@Inject("source")` class field.
 - TypeScript decorated constructor-parameter injection now resolves when `constructor(@Inject("source") source) { this.source = source }` consumes a static provider binding.
+- TypeScript decorated constructor-parameter direct injection now resolves when `constructor(@Inject("source") source) { sink(source.getInput()) }` consumes a static provider binding without assigning the parameter to a field.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
 - JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, chained map, container API, provider-binding, and provider API alias service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
 
@@ -114,6 +115,7 @@
 - `41f6fd5df72231bef383165a426e20c360a8a1e9` - `fix: resolve javascript provider api aliases` (unsigned for the same local signing issue)
 - `8191e9b4b794fe33b7952199c73aa592f96db5ab` - `fix: resolve typescript decorated property injection` (unsigned for the same local signing issue)
 - `aec95cbff3c1b8925aedcef1a267874cf80c098f` - `fix: resolve typescript decorated constructor injection` (unsigned for the same local signing issue)
+- `46daf9d1d6bc012747ec876b2e91a3c793cb71ca` - `fix: resolve direct typescript decorated constructor injection` (unsigned for the same local signing issue)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -295,7 +297,7 @@ python count=1 errors=0 interfile_lang_count=1
 js count=1 errors=0 interfile_lang_count=1
 ```
 
-Latest broad Docker direct scan matrix after `aec95cbf`:
+Latest broad Docker direct scan matrix after `46daf9d1`:
 
 ```text
 taint_interfile_js count=1 expected=1 errors=0 interfile_lang_count=1
@@ -340,6 +342,7 @@ taint_interfile_js_constructor_parameter_branch_alias count=1 expected=1 errors=
 taint_interfile_typescript_parameter_property count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_typescript_decorated_property_injection count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_typescript_decorated_constructor_parameter_injection count=1 expected=1 errors=0 interfile_lang_count=1
+taint_interfile_typescript_decorated_constructor_parameter_direct_injection count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_js_sanitizer count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_js_propagator count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_imported_value_package_collision count=2 expected=2 errors=0 interfile_lang_count=2
@@ -1125,9 +1128,44 @@ Current verification after the fix:
 - `git diff --check` passes.
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
-Boundary note: direct constructor-argument object shapes, simple local helper aliases, simple alias reassignments, simple factory-returned constructor helpers, factory-local helper aliases, variable-assigned arrow factories, simple higher-order factories, callable factory variable aliases, service-container object properties, static string-keyed, constant-keyed, simple computed-keyed, simple map-like, simple template-keyed, simple chained-map, explicit container API, provider-binding, provider API alias service-container object properties, TypeScript decorated property injection, and TypeScript decorated constructor-parameter injection through static provider bindings, service-container factory returns, service-container factory aliases, direct destructuring from service-container factory returns, simple composed service-container factory returns, destructured service-container properties, nested service-container property paths, mutated service-container property assignments, object-spread service containers, object-rest service containers, nested mutated service-container aliases, object factory properties, inline object factory properties, object factory property aliases, mutated object factory property aliases, and same-class conditional branch aliases are covered. Broader dependency-injection forms remain unaudited, including constructor-parameter decorators without a field assignment, dynamic template expressions, and dynamic container keys.
+Boundary note: direct constructor-argument object shapes, simple local helper aliases, simple alias reassignments, simple factory-returned constructor helpers, factory-local helper aliases, variable-assigned arrow factories, simple higher-order factories, callable factory variable aliases, service-container object properties, static string-keyed, constant-keyed, simple computed-keyed, simple map-like, simple template-keyed, simple chained-map, explicit container API, provider-binding, provider API alias service-container object properties, TypeScript decorated property injection, TypeScript decorated constructor-parameter field injection, and TypeScript decorated constructor-parameter direct injection through static provider bindings, service-container factory returns, service-container factory aliases, direct destructuring from service-container factory returns, simple composed service-container factory returns, destructured service-container properties, nested service-container property paths, mutated service-container property assignments, object-spread service containers, object-rest service containers, nested mutated service-container aliases, object factory properties, inline object factory properties, object factory property aliases, mutated object factory property aliases, and same-class conditional branch aliases are covered. Broader dependency-injection forms remain unaudited, including dynamic template expressions, dynamic container keys, and additional library-specific provider APIs.
 
-Next resume point: continue auditing broader dependency-injection object-shape forms, especially constructor-parameter decorators without a field assignment, dynamic template expressions, dynamic container keys, and additional library-specific provider APIs.
+Next resume point: continue auditing broader dependency-injection object-shape forms, especially dynamic template expressions, dynamic container keys, and additional library-specific provider APIs.
+
+---
+
+## Latest Session Update: TypeScript Direct Decorated Constructor Injection Green
+
+TypeScript decorated constructor-parameter direct injection now preserves object mappings when `constructor(@Inject("source") source) { sink(source.getInput()) }` consumes a statically bound provider key without assigning the parameter to a field.
+
+- `src/tainting/Object_initialization.ml` now records an object mapping for the decorated constructor parameter itself when its static provider key has a known binding.
+- The existing injected field mapping still covers field assignment forms, and focused scans were rerun for property, field-assignment constructor, and direct constructor parameter cases.
+- `cli/tests/default/e2e/rules/taint_interfile_typescript_decorated_constructor_parameter_direct_injection.yaml` and `targets/taint_interfile_typescript_decorated_constructor_parameter_direct_injection/` lock the direct constructor-parameter use form.
+
+Red proof before the fix:
+
+```text
+taint_interfile_typescript_decorated_constructor_parameter_direct_injection count=0 expected=1 errors=0 interfile_lang_count=1
+```
+
+Green proof after injected parameter object mapping:
+
+```text
+taint_interfile_typescript_decorated_constructor_parameter_direct_injection count=1 expected=1 errors=0 interfile_lang_count=1
+rules.taint_interfile_typescript_decorated_constructor_parameter_direct_injection    targets/taint_interfile_typescript_decorated_constructor_parameter_direct_injection/app.ts    17
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes.
+- Focused scans pass for all current decorator forms: direct constructor parameter, field-assignment constructor parameter, and decorated property injection.
+- Full direct regression matrix passes with `matrix_failures=0`, including `taint_interfile_typescript_decorated_constructor_parameter_direct_injection count=1`, `taint_interfile_typescript_decorated_constructor_parameter_injection count=1`, `taint_interfile_typescript_decorated_property_injection count=1`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+
+Boundary note: decorated constructor injection is covered when the decorator key is static and the provider key has a recorded binding. Runtime-dependent keys and decorator metadata that does not name a static provider key remain unaudited.
+
+Next resume point: continue auditing broader dependency-injection object-shape forms, especially dynamic template expressions, dynamic container keys, and additional library-specific provider APIs.
 
 ---
 
@@ -1160,9 +1198,9 @@ Current verification after the fix:
 - `git diff --check` passes.
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
-Boundary note: decorated constructor injection is covered when the decorated parameter is assigned to a class field and the static provider key has a recorded binding. Constructor parameter metadata that is not assigned to a field, runtime-dependent keys, and decorator metadata that does not name a static provider key remain unaudited.
+Boundary note: decorated constructor injection is covered when the decorated parameter is assigned to a class field and the static provider key has a recorded binding. Runtime-dependent keys and decorator metadata that does not name a static provider key remain unaudited.
 
-Next resume point: continue auditing broader dependency-injection object-shape forms, especially constructor-parameter decorators without a field assignment, dynamic template expressions, dynamic container keys, and additional library-specific provider APIs.
+Next resume point: continue auditing broader dependency-injection object-shape forms, especially dynamic template expressions, dynamic container keys, and additional library-specific provider APIs.
 
 ---
 
