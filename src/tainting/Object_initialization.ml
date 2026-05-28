@@ -386,7 +386,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let is_object_property_provider_method_name =
     method_name_matches
       [ "to"; "toConstantValue"; "toDynamicValue"; "useClass"; "useValue";
-        "useFactory" ]
+        "useFactory"; "asClass"; "asValue"; "asFunction" ]
   in
   let is_inject_attribute_name =
     method_name_matches [ "Inject"; "Autowired" ]
@@ -978,9 +978,10 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     in
     let class_name_from_provider_expr provider_method_name provider_expr =
       match provider_method_name with
-      | "to" | "useClass" -> class_name_from_class_reference provider_expr
-      | "toConstantValue" | "useValue" -> class_name_from_expr provider_expr
-      | "toDynamicValue" | "useFactory" -> (
+      | "to" | "useClass" | "asClass" -> class_name_from_class_reference provider_expr
+      | "toConstantValue" | "useValue" | "asValue" ->
+          class_name_from_expr provider_expr
+      | "toDynamicValue" | "useFactory" | "asFunction" -> (
           match provider_expr.G.e with
           | G.Lambda fdef -> class_name_from_lambda_return fdef
           | _ -> class_name_from_function_return provider_expr)
