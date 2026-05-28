@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_typescript_provider_shorthand_metadata
+    message: Taint should flow through TypeScript provider class shorthand metadata
+    languages: [typescript]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

@@ -44,6 +44,11 @@ let string_of_name = function
   | G.Id ((name, _), _) -> Some name
   | G.IdQualified { name_last = ((name, _), _); _ } -> Some name
 
+let is_class_like_name name =
+  match string_of_name name with
+  | Some name -> is_uppercase_start name
+  | None -> false
+
 let same_name name1 name2 =
   match (string_of_name name1, string_of_name name2) with
   | Some str1, Some str2 -> String.equal str1 str2
@@ -430,6 +435,9 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
          | G.NamedAttr (_, attr_name, attr_args)
            when is_inject_attribute_name attr_name -> (
              match Tok.unbracket attr_args with
+             | [ G.Arg { G.e = G.N class_token; _ } ]
+               when is_class_like_name class_token ->
+                 Some class_token
              | [ G.Arg key_expr ] -> name_from_property_key_expr key_expr
              | _ -> None)
          | _ -> None)
@@ -599,7 +607,11 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let class_name_from_injected_provider_key field_name =
     !object_property_mappings
     |> List.find_opt (fun (_mapped_obj, mapped_path, _class_name) ->
-           same_resolved_path [ field_name ] mapped_path)
+           same_resolved_path [ field_name ] mapped_path
+           ||
+           match mapped_path with
+           | [ mapped_name ] -> same_name field_name mapped_name
+           | _ -> false)
     |> Option.map (fun (_mapped_obj, _mapped_path, class_name) -> class_name)
   in
   let class_name_from_provider_key_or_self class_name =
@@ -1245,24 +1257,40 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
            || same_name provider_name mapped_name)
     |> Option.map snd
   in
-  let rec provider_array_exprs_have_provider_object provider_exprs =
+  let class_name_from_provider_shorthand_expr expr =
+    match expr.G.e with
+    | G.N class_name when is_class_like_name class_name -> Some class_name
+    | _ -> None
+  in
+  let rec provider_array_exprs_have_provider_entry provider_exprs =
     provider_exprs
     |> List.exists (function
          | { G.e = G.Record (_, fields, _); _ } ->
              Option.is_some (class_mapping_from_provider_object_fields fields)
+         | provider_expr
+           when Option.is_some
+                  (class_name_from_provider_shorthand_expr provider_expr) ->
+             true
          | { G.e = G.Container (G.Array, (_, nested_provider_exprs, _)); _ } ->
-             provider_array_exprs_have_provider_object nested_provider_exprs
+             provider_array_exprs_have_provider_entry nested_provider_exprs
          | _ -> false)
   in
   let record_provider_array_mapping provider_name expr =
     match expr.G.e with
     | G.Container (G.Array, (_, provider_exprs, _))
-      when provider_array_exprs_have_provider_object provider_exprs ->
+      when provider_array_exprs_have_provider_entry provider_exprs ->
         provider_array_mappings :=
           (provider_name, provider_exprs) :: !provider_array_mappings
     | _ -> ()
   in
   let rec record_provider_metadata_mapping expr =
+    let record_provider_shorthand_class_mapping class_name =
+      object_property_mappings :=
+        ( name_from_static_string_value "__opengrep_provider_metadata",
+          [ class_name ],
+          class_name )
+        :: !object_property_mappings
+    in
     let rec record_provider_array_exprs provider_exprs =
       provider_exprs
       |> List.iter (function
@@ -1281,7 +1309,11 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                match provider_array_exprs_from_name provider_name with
                | Some provider_exprs -> record_provider_array_exprs provider_exprs
                | None -> ())
-           | _ -> ())
+           | provider_expr -> (
+               match class_name_from_provider_shorthand_expr provider_expr with
+               | Some class_name ->
+                   record_provider_shorthand_class_mapping class_name
+               | None -> ()))
     in
     match expr.G.e with
     | G.Record (_, fields, _) ->
@@ -1793,6 +1825,21 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         super#visit_definition () def
     end
   in
+  let provider_metadata_visitor =
+    object
+      inherit [_] G.iter as super
+
+      method! visit_expr () expr =
+        record_provider_metadata_mapping expr;
+        super#visit_expr () expr
+
+      method! visit_definition () def =
+        (match def with
+        | entity, G.ClassDef _ -> record_provider_metadata_attrs entity.G.attrs
+        | _ -> ());
+        super#visit_definition () def
+    end
+  in
 
   let visitor =
     object
@@ -1982,6 +2029,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   string_constant_visitor#visit_program () ast;
   function_return_visitor#visit_program () ast;
   provider_array_visitor#visit_program () ast;
+  provider_metadata_visitor#visit_program () ast;
   visitor#visit_program () ast;
   !object_mappings
 
