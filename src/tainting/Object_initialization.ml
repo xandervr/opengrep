@@ -320,10 +320,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     method_name_matches [ "get"; "resolve"; "lookup" ]
   in
   let is_object_property_set_method_name =
-    method_name_matches [ "set"; "register"; "bind" ]
+    method_name_matches [ "set"; "register"; "bind"; "provide" ]
   in
   let is_object_property_provider_method_name =
-    method_name_matches [ "to"; "toConstantValue"; "toDynamicValue" ]
+    method_name_matches
+      [ "to"; "toConstantValue"; "toDynamicValue"; "useClass"; "useValue";
+        "useFactory" ]
   in
   let rec object_property_path_from_base obj_expr field_name =
     match object_property_path_from_expr obj_expr with
@@ -850,9 +852,9 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     in
     let class_name_from_provider_expr provider_method_name provider_expr =
       match provider_method_name with
-      | "to" -> class_name_from_class_reference provider_expr
-      | "toConstantValue" -> class_name_from_expr provider_expr
-      | "toDynamicValue" -> (
+      | "to" | "useClass" -> class_name_from_class_reference provider_expr
+      | "toConstantValue" | "useValue" -> class_name_from_expr provider_expr
+      | "toDynamicValue" | "useFactory" -> (
           match provider_expr.G.e with
           | G.Lambda fdef -> class_name_from_lambda_return fdef
           | _ -> class_name_from_function_return provider_expr)
