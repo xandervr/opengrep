@@ -61,6 +61,7 @@
 - TypeScript provider metadata aliases now resolve same-file and imported provider arrays passed as `providers: providerList` in decorator/bootstrap metadata.
 - TypeScript class-token provider metadata now resolves typed constructor metadata through provider tokens such as `{ provide: TokenClass, useClass: TokenImpl }`, including direct, same-file provider-list alias, and imported provider-list alias forms.
 - TypeScript provider metadata spreads now resolve `providers: [...providerList]` in direct decorator metadata, metadata objects passed to bootstrap calls, and imported provider-list metadata.
+- TypeScript nested provider arrays now resolve provider objects inside nested `providers` arrays for direct metadata, same-file provider-list aliases, and imported provider-list aliases.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
 - JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, dynamic-keyed, dynamic-template-keyed, chained map, container API, provider-binding, provider API alias, provider method alias, provider alias, and registration-map service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
 
@@ -146,6 +147,7 @@
 - `27f5f2bf` - `fix: resolve provider metadata aliases` (signed)
 - `2fca645f2` - `fix: resolve provider token metadata` (signed)
 - `04226b045` - `fix: resolve provider metadata spreads` (signed)
+- `3dcc43bed` - `fix: resolve nested provider metadata arrays` (signed)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -169,7 +171,7 @@ The Docker-built help text now says:
     not support taint mode.
 ```
 
-**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, DI-class constructor type metadata, async `getAsync`/`resolveAsync` provider reads, parent-to-child container aliases, provider lifecycle-chain wrappers, provider-object registration arrays, direct `providers: [...]` metadata, provider-list aliases, class-token provider metadata, or provider-list spreads. Good next targets are nested provider arrays in metadata, provider tuples/classes without object wrappers, and additional library-specific provider APIs. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
+**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, DI-class constructor type metadata, async `getAsync`/`resolveAsync` provider reads, parent-to-child container aliases, provider lifecycle-chain wrappers, provider-object registration arrays, direct `providers: [...]` metadata, provider-list aliases, class-token provider metadata, provider-list spreads, or nested provider arrays. Good next targets are provider class shorthand entries without object wrappers, tuple provider forms, and additional library-specific provider APIs. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
 
 **Next concrete actions:**
 
@@ -427,6 +429,45 @@ rules.taint_interfile_typescript_provider_metadata_spread_container    targets/t
 Latest broad Docker direct scan matrix after `04226b045`:
 
 ```text
+taint_interfile_typescript_provider_metadata_spread_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_typescript_provider_token_metadata count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_typescript_provider_metadata_alias_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_typescript_provider_metadata_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_provider_object_array_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_provider_lifecycle_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_hierarchical_provider_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_async_provider_container count=3 expected=3 errors=0 interfile_lang_count=2 status=0
+taint_interfile_js_constructor_parameter_registration_map_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_js_constructor_parameter_provider_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_js_constructor_parameter_provider_api_alias_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_js_constructor_parameter_provider_method_alias_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_js_constructor_parameter_provider_alias_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_typescript_decorated_metadata_injection count=3 expected=3 errors=0 interfile_lang_count=1 status=0
+taint_interfile_typescript_injectable_constructor_metadata count=2 expected=2 errors=0 interfile_lang_count=1 status=0
+taint_interfile_language_matrix count=28 expected=28 errors=0 interfile_lang_count=28 status=0
+taint_interfile_parser_smoke count=13 expected=13 errors=0 interfile_lang_count=13 status=0
+matrix_failures=0
+```
+
+Latest nested-provider-array red proof before `3dcc43bed`:
+
+```text
+provider_nested_red count=0 expected=3 errors=0 interfile_lang_count=1
+```
+
+Latest nested-provider-array green proof after `3dcc43bed`:
+
+```text
+provider_nested_green count=3 expected=3 errors=0 interfile_lang_count=1
+rules.taint_interfile_typescript_provider_nested_array_metadata    targets/taint_interfile_typescript_provider_nested_array_metadata/alias_nested/app.ts    15
+rules.taint_interfile_typescript_provider_nested_array_metadata    targets/taint_interfile_typescript_provider_nested_array_metadata/direct_nested/app.ts    18
+rules.taint_interfile_typescript_provider_nested_array_metadata    targets/taint_interfile_typescript_provider_nested_array_metadata/imported_nested/app.ts    16
+```
+
+Latest broad Docker direct scan matrix after `3dcc43bed`:
+
+```text
+taint_interfile_typescript_provider_nested_array_metadata count=3 expected=3 errors=0 interfile_lang_count=1 status=0
 taint_interfile_typescript_provider_metadata_spread_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
 taint_interfile_typescript_provider_token_metadata count=3 expected=3 errors=0 interfile_lang_count=1 status=0
 taint_interfile_typescript_provider_metadata_alias_container count=3 expected=3 errors=0 interfile_lang_count=1 status=0
