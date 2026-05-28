@@ -88,10 +88,73 @@ let hook_mk_taint_spec_match_preds = ref None
 (* Finding matches for taint specs *)
 (*****************************************************************************)
 
+let files_of_program (ast : G.program) : Fpath.t list =
+  ast
+  |> List_.filter_map (fun stmt ->
+         match AST_generic_helpers.range_of_any_opt (G.S stmt) with
+         | Some (start_loc, _end_loc) -> Some start_loc.pos.file
+         | None -> None)
+  |> List.sort_uniq Fpath.compare
+
+let filter_program_to_files (files : Fpath.t list) (ast : G.program) :
+    G.program =
+  let file_matches file =
+    files |> List.exists (Fpath.equal file)
+  in
+  ast
+  |> List.filter (fun stmt ->
+         match AST_generic_helpers.range_of_any_opt (G.S stmt) with
+         | Some (start_loc, _end_loc) -> file_matches start_loc.pos.file
+         | None -> not (List_.null files))
+
+let supports_formula_file_prefilter (xlang : Xlang.t) : bool =
+  match xlang with
+  | Xlang.L (lang, _) -> Lang.equal lang Lang.Js || Lang.equal lang Lang.Ts
+  | Xlang.LRegex
+  | Xlang.LSpacegrep
+  | Xlang.LAliengrep ->
+      false
+
+let xtarget_for_formula_prefilter (rule : R.t) (formula : R.formula)
+    (xtarget : Xtarget.t) : Xtarget.t =
+  if not (supports_formula_file_prefilter rule.target_analyzer) then xtarget
+  else
+    match
+      Analyze_rule.regexp_prefilter_of_formula ~xlang:rule.target_analyzer
+        formula
+    with
+    | None -> xtarget
+    | Some (_prefilter_formula, keep_content) -> (
+        let ast, skipped_tokens = Lazy.force xtarget.lazy_ast_and_errors in
+        match files_of_program ast with
+        | [] -> xtarget
+        | files ->
+            let candidate_files =
+              files
+              |> List.filter (fun file ->
+                     try keep_content (UFile.read_file file) with
+                     | _exn -> true)
+            in
+            if Int.equal (List.length candidate_files) (List.length files) then
+              xtarget
+            else
+              {
+                xtarget with
+                lazy_ast_and_errors =
+                  lazy
+                    ( filter_program_to_files candidate_files ast,
+                      skipped_tokens );
+              })
+
 (* Finds all matches of a taint-spec pattern formula. *)
-let range_w_metas_of_formula (xconf : Match_env.xconfig) (xtarget : Xtarget.t)
-    (rule : R.t) (formula : R.formula) : RM.ranges * ME.t list =
+let range_w_metas_of_formula ?(prefilter = false) (xconf : Match_env.xconfig)
+    (xtarget : Xtarget.t) (rule : R.t) (formula : R.formula) :
+    RM.ranges * ME.t list =
   (* !! Calling Match_search_mode here !! *)
+  let xtarget =
+    if prefilter then xtarget_for_formula_prefilter rule formula xtarget
+    else xtarget
+  in
   let report, ranges =
     Match_search_mode.matches_of_formula xconf rule xtarget formula None
   in
@@ -112,8 +175,9 @@ let%test _ =
   concat_map_with_expls (fun x -> ([ -x; x ], [ 2 * x; 3 * x ])) [ 0; 1; 2 ]
   =*= ([ 0; 0; -1; 1; -2; 2 ], [ 0; 0; 2; 3; 4; 6 ])
 
-let find_range_w_metas formula_cache (xconf : Match_env.xconfig)
-    (xtarget : Xtarget.t) (rule : R.t) (specs : (R.formula * 'a) list) :
+let find_range_w_metas ?(prefilter = false) formula_cache
+    (xconf : Match_env.xconfig) (xtarget : Xtarget.t) (rule : R.t)
+    (specs : (R.formula * 'a) list) :
     (RM.t * 'a) list * ME.t list =
   (* TODO: Make an Or formula and run a single query. *)
   (* if perf is a problem, we could build an interval set here *)
@@ -121,12 +185,12 @@ let find_range_w_metas formula_cache (xconf : Match_env.xconfig)
   |> concat_map_with_expls (fun (pf, x) ->
          let ranges, expls =
            Formula_cache.cached_find_opt formula_cache pf (fun () ->
-               range_w_metas_of_formula xconf xtarget rule pf)
+               range_w_metas_of_formula ~prefilter xconf xtarget rule pf)
          in
          (ranges |> List_.map (fun rwm -> (rwm, x)), expls))
 
 let find_sources_ranges formula_cache xconf xtarget rule (spec : R.taint_spec) =
-  find_range_w_metas formula_cache xconf xtarget rule
+  find_range_w_metas ~prefilter:true formula_cache xconf xtarget rule
     (spec.sources |> snd
     |> List_.map (fun (src : R.taint_source) -> (src.source_formula, src)))
 [@@trace_trace]
@@ -145,7 +209,7 @@ let find_sanitizers_matches formula_cache (xconf : Match_env.xconfig)
          let ranges, expls =
            Formula_cache.cached_find_opt formula_cache
              sanitizer.sanitizer_formula (fun () ->
-               range_w_metas_of_formula xconf xtarget rule
+               range_w_metas_of_formula ~prefilter:true xconf xtarget rule
                  sanitizer.sanitizer_formula)
          in
          ( ranges
@@ -164,7 +228,8 @@ let find_propagators_matches formula_cache (xconf : Match_env.xconfig)
          let ranges_w_metavars, _expsTODO =
            Formula_cache.cached_find_opt formula_cache p.propagator_formula
              (fun () ->
-               range_w_metas_of_formula xconf xtarget rule p.propagator_formula)
+               range_w_metas_of_formula ~prefilter:true xconf xtarget rule
+                 p.propagator_formula)
          in
          (* Now, for each match of the propagator pattern, we try to construct
           * a `propagator_match`. We just need to look up what code is captured
