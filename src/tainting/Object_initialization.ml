@@ -1132,7 +1132,11 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           | G.Lambda fdef -> class_name_from_lambda_return fdef
           | _ -> None)
     in
-    (match class_name_from_expr value_expr with
+    (match
+       match class_name_from_provider_spec_expr value_expr with
+       | Some _ as class_name -> class_name
+       | None -> class_name_from_expr value_expr
+     with
     | Some class_name ->
         record_object_property_class_mapping obj_name field_path class_name
     | None -> ());
