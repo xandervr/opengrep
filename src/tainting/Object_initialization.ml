@@ -214,6 +214,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let constructor_param_field_mappings = ref [] in
   let provider_array_mappings = ref [] in
   let function_return_mappings = ref [] in
+  let function_return_param_mappings = ref [] in
   let function_return_object_property_mappings = ref [] in
   let function_alias_mappings = ref [] in
   let object_property_factory_return_mappings = ref [] in
@@ -1301,22 +1302,29 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
          | _ -> None)
   in
   let class_name_from_provider_factory_deps provider_expr deps_expr =
-    match (provider_expr.G.e, deps_expr.G.e) with
-    | ( G.Lambda fdef,
-        G.Container (G.Array, (_, dependency_exprs, _)) ) -> (
-        match name_from_lambda_returned_name fdef with
-        | Some returned_name -> (
-            let returned_param =
+    let returned_param_index =
+      match provider_expr.G.e with
+      | G.Lambda fdef -> (
+          match name_from_lambda_returned_name fdef with
+          | Some returned_name ->
               param_names_from_function fdef
               |> List.mapi (fun index param_name -> (index, param_name))
               |> List.find_opt (fun (_index, param_name) ->
                      same_resolved_name returned_name param_name)
-            in
-            Option.bind returned_param (fun (index, _param_name) ->
-                match List.nth_opt dependency_exprs index with
-                | Some dependency_expr ->
-                    class_name_from_provider_dep_expr dependency_expr
-                | None -> None))
+              |> Option.map fst
+          | None -> None)
+      | G.N factory_name ->
+          !function_return_param_mappings
+          |> List.find_opt (fun (mapped_factory_name, _index) ->
+                 same_resolved_name factory_name mapped_factory_name)
+          |> Option.map snd
+      | _ -> None
+    in
+    match (returned_param_index, deps_expr.G.e) with
+    | ( Some index,
+        G.Container (G.Array, (_, dependency_exprs, _)) ) -> (
+        match List.nth_opt dependency_exprs index with
+        | Some dependency_expr -> class_name_from_provider_dep_expr dependency_expr
         | None -> None)
     | _ -> None
   in
@@ -1718,6 +1726,28 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let record_function_return_mapping func_name fdef =
     let local_object_mappings = ref [] in
     let local_object_property_mappings = ref [] in
+    let parameter_names =
+      Tok.unbracket fdef.G.fparams
+      |> List.filter_map (function
+           | G.Param { G.pname = Some ((param_name, _)); pinfo; _ } ->
+               Some (G.Id ((param_name, Tok.unsafe_fake_tok param_name), pinfo))
+           | _ -> None)
+    in
+    let returned_param_index returned_name =
+      parameter_names
+      |> List.mapi (fun index param_name -> (index, param_name))
+      |> List.find_opt (fun (_index, param_name) ->
+             same_resolved_name returned_name param_name)
+      |> Option.map fst
+    in
+    let record_returned_param_mapping returned_name =
+      match returned_param_index returned_name with
+      | Some index ->
+          function_return_param_mappings :=
+            (func_name, index) :: !function_return_param_mappings;
+          true
+      | None -> false
+    in
     let rec class_name_from_return_expr expr =
       match expr.G.e with
       | G.Await (_, awaited_expr) -> class_name_from_return_expr awaited_expr
@@ -1915,14 +1945,19 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                     (func_name, class_name) :: !function_return_mappings
               | None -> (
                   match return_expr.G.e with
-                  | G.N returned_func ->
-                      function_alias_mappings :=
-                        (func_name, returned_func) :: !function_alias_mappings
+                  | G.N returned_name ->
+                      if not (record_returned_param_mapping returned_name) then
+                        function_alias_mappings :=
+                          (func_name, returned_name) :: !function_alias_mappings
                   | _ -> ()))
           | _ -> ());
           super#visit_stmt () stmt
       end
     in
+    (match fdef.G.fbody with
+    | G.FBExpr { G.e = G.N returned_name; _ } ->
+        ignore (record_returned_param_mapping returned_name)
+    | _ -> ());
     visitor#visit_function_definition () fdef
   in
   let function_return_visitor =
