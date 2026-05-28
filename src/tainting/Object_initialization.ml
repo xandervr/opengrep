@@ -302,21 +302,49 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     | G.EDynamic field_expr -> name_from_static_property_expr field_expr
     | _ -> None
   in
-  let rec object_property_path_from_expr expr =
-    let object_property_path_from_base obj_expr field_name =
-      match object_property_path_from_expr obj_expr with
-      | Some (obj_name, field_path) -> Some (obj_name, field_path @ [ field_name ])
-      | None -> (
-          match obj_expr.G.e with
-          | G.N obj_name -> Some (obj_name, [ field_name ])
-          | _ -> None)
-    in
+  let rec object_property_path_from_base obj_expr field_name =
+    match object_property_path_from_expr obj_expr with
+    | Some (obj_name, field_path) -> Some (obj_name, field_path @ [ field_name ])
+    | None -> (
+        match obj_expr.G.e with
+        | G.N obj_name -> Some (obj_name, [ field_name ])
+        | _ -> None)
+  and object_property_path_from_expr expr =
     match expr.G.e with
     | G.DotAccess (obj_expr, _, G.FN field_name) ->
         object_property_path_from_base obj_expr field_name
     | G.ArrayAccess (obj_expr, (_, field_expr, _)) -> (
         match name_from_static_property_expr field_expr with
         | Some field_name -> object_property_path_from_base obj_expr field_name
+        | None -> None)
+    | G.Call
+        ( { e =
+              G.DotAccess
+                ( obj_expr,
+                  _,
+                  G.FN (G.Id (("get", _), _) as _method_name) );
+            _ },
+          (_, [ G.Arg key_expr ], _) ) -> (
+        match name_from_static_property_expr key_expr with
+        | Some field_name -> object_property_path_from_base obj_expr field_name
+        | None -> None)
+    | _ -> None
+  in
+  let object_property_set_call_from_expr expr =
+    match expr.G.e with
+    | G.Call
+        ( { e =
+              G.DotAccess
+                ( obj_expr,
+                  _,
+                  G.FN (G.Id (("set", _), _) as _method_name) );
+            _ },
+          (_, [ G.Arg key_expr; G.Arg value_expr ], _) ) -> (
+        match name_from_static_property_expr key_expr with
+        | Some field_name -> (
+            match object_property_path_from_base obj_expr field_name with
+            | Some (obj_name, field_path) -> Some (obj_name, field_path, value_expr)
+            | None -> None)
         | None -> None)
     | _ -> None
   in
@@ -677,12 +705,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         record_fields [] fields
     | _ -> ()
   in
-  let record_object_property_assignment_mapping lval_expr rval_expr =
+  let record_object_property_value_mapping obj_name field_path value_expr =
     let record_for_alias add_mapping obj_name field_path value =
-        (match object_property_path_from_alias obj_name with
-        | Some (root_obj_name, root_field_path) ->
-            add_mapping root_obj_name (root_field_path @ field_path) value
-        | None -> ())
+      match object_property_path_from_alias obj_name with
+      | Some (root_obj_name, root_field_path) ->
+          add_mapping root_obj_name (root_field_path @ field_path) value
+      | None -> ()
     in
     let add_object_mapping obj_name field_path class_name =
       object_property_mappings :=
@@ -705,24 +733,32 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
           | G.Lambda fdef -> class_name_from_lambda_return fdef
           | _ -> None)
     in
+    (match class_name_from_expr value_expr with
+    | Some class_name ->
+        add_object_mapping obj_name field_path class_name;
+        record_for_alias add_object_mapping obj_name field_path class_name
+    | None -> ());
+    (match function_alias_from_expr value_expr with
+    | Some func_name ->
+        add_function_mapping obj_name field_path func_name;
+        record_for_alias add_function_mapping obj_name field_path func_name
+    | None -> ());
+    match class_name_from_factory_expr value_expr with
+    | Some class_name ->
+        add_factory_return_mapping obj_name field_path class_name;
+        record_for_alias add_factory_return_mapping obj_name field_path class_name
+    | None -> ()
+  in
+  let record_object_property_assignment_mapping lval_expr rval_expr =
     match object_property_path_from_expr lval_expr with
     | Some (obj_name, field_path) ->
-        (match class_name_from_expr rval_expr with
-        | Some class_name ->
-            add_object_mapping obj_name field_path class_name;
-            record_for_alias add_object_mapping obj_name field_path class_name
-        | None -> ());
-        (match function_alias_from_expr rval_expr with
-        | Some func_name ->
-            add_function_mapping obj_name field_path func_name;
-            record_for_alias add_function_mapping obj_name field_path func_name
-        | None -> ());
-        (match class_name_from_factory_expr rval_expr with
-        | Some class_name ->
-            add_factory_return_mapping obj_name field_path class_name;
-            record_for_alias add_factory_return_mapping obj_name field_path
-              class_name
-        | None -> ())
+        record_object_property_value_mapping obj_name field_path rval_expr
+    | None -> ()
+  in
+  let record_object_property_method_mapping expr =
+    match object_property_set_call_from_expr expr with
+    | Some (obj_name, field_path, value_expr) ->
+        record_object_property_value_mapping obj_name field_path value_expr
     | None -> ()
   in
   let record_object_property_alias_mapping alias_name init_expr =
@@ -985,6 +1021,17 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                    :: !local_object_property_mappings)
       | _ -> ()
     in
+    let record_local_object_property_method_mapping expr =
+      match object_property_set_call_from_expr expr with
+      | Some (obj_name, field_path, value_expr) -> (
+          match class_name_from_return_expr value_expr with
+          | Some class_name ->
+              local_object_property_mappings :=
+                (obj_name, field_path, class_name)
+                :: !local_object_property_mappings
+          | None -> ())
+      | None -> ()
+    in
     let visitor =
       object
         inherit [_] G.iter as super
@@ -997,8 +1044,13 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                   record_local_object_mapping var_name init_expr;
                   record_local_object_property_mappings var_name init_expr
               | _ -> ())
-          | G.ExprStmt ({ G.e = G.Assign ({ G.e = G.N var_name; _ }, _, rval_expr); _ }, _) ->
-              record_local_object_mapping var_name rval_expr
+          | G.ExprStmt (expr, _) -> (
+              record_local_object_property_method_mapping expr;
+              match expr.G.e with
+              | G.Assign ({ G.e = G.N var_name; _ }, _, rval_expr) ->
+                  record_local_object_mapping var_name rval_expr;
+                  record_local_object_property_mappings var_name rval_expr
+              | _ -> ())
           | G.Return (_, Some return_expr, _) -> (
               record_returned_object_properties return_expr;
               match class_name_from_return_expr return_expr with
@@ -1122,6 +1174,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                 | _ -> ())
             | _ -> ())
         | G.ExprStmt (expr, _) -> (
+            record_object_property_method_mapping expr;
             match expr.G.e with
             | G.Assign (lval_expr, _, rval_expr) -> (
                 record_object_property_assignment_mapping lval_expr rval_expr;
