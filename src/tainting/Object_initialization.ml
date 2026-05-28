@@ -310,6 +310,41 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
            && same_resolved_path field_path mapped_path)
     |> Option.map (fun (_obj_name, _field_path, func_name) -> func_name)
   in
+  let function_has_returned_object_properties func_name =
+    !function_return_object_property_mappings
+    |> List.exists (fun (mapped_func_name, _mapped_path, _class_name) ->
+           same_resolved_name func_name mapped_func_name)
+  in
+  let rec returned_object_property_function_names seen func_name =
+    if List.exists (same_resolved_name func_name) seen then []
+    else
+      let direct_names =
+        if function_has_returned_object_properties func_name then [ func_name ]
+        else []
+      in
+      let alias_names =
+        match name_from_name_mapping function_alias_mappings func_name with
+        | Some aliased_func ->
+            returned_object_property_function_names (func_name :: seen)
+              aliased_func
+        | None -> []
+      in
+      direct_names @ alias_names
+  in
+  let returned_object_property_function_names_from_callee callee_expr =
+    let function_names_from_name name =
+      returned_object_property_function_names [] name
+    in
+    match callee_expr.G.e with
+    | G.N func_name -> function_names_from_name func_name
+    | _ -> (
+        match object_property_path_from_expr callee_expr with
+        | Some (obj_name, field_path) -> (
+            match function_name_from_object_property_factory obj_name field_path with
+            | Some func_name -> function_names_from_name func_name
+            | None -> [])
+        | None -> [])
+  in
   let class_name_from_direct_object_property_factory_expr expr =
     match object_property_path_from_expr expr with
     | Some (obj_name, field_path) ->
@@ -378,7 +413,9 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
             | None -> (
                 match name_from_name_mapping function_return_mappings name with
                 | Some _ -> Some name
-                | None -> None))
+                | None ->
+                    if function_has_returned_object_properties name then Some name
+                    else None))
         | _ -> (
             match object_property_path_from_expr expr with
             | Some (obj_name, field_path) ->
@@ -507,11 +544,19 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   in
   let record_object_property_mappings obj_name init_expr =
     match init_expr.G.e with
-    | G.Call ({ G.e = G.N func_name; _ }, _) ->
+    | G.Call (callee_expr, _) ->
+        let returned_property_func_names =
+          returned_object_property_function_names_from_callee callee_expr
+        in
         !function_return_object_property_mappings
         |> List.iter
              (fun (mapped_func_name, mapped_path, class_name) ->
-               if same_resolved_name func_name mapped_func_name then
+               if
+                 List.exists
+                   (fun func_name ->
+                     same_resolved_name func_name mapped_func_name)
+                   returned_property_func_names
+               then
                  object_property_mappings :=
                    (obj_name, mapped_path, class_name)
                    :: !object_property_mappings)
