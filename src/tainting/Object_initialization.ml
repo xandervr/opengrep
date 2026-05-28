@@ -211,6 +211,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let function_alias_mappings = ref [] in
   let object_property_factory_return_mappings = ref [] in
   let object_property_function_mappings = ref [] in
+  let string_constant_mappings = ref [] in
   let class_name_from_type (type_ : G.type_) =
     match type_.G.t with
     | G.TyN name when is_known_class name class_names -> Some name
@@ -264,11 +265,19 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     List.length path1 = List.length path2
     && List.for_all2 same_resolved_name path1 path2
   in
-  let name_from_static_property_expr expr =
+  let name_from_string_literal_expr expr =
     match expr.G.e with
     | G.L (G.String (_, (field_name, tok), _)) ->
         Some (G.Id ((field_name, tok), G.empty_id_info ()))
     | _ -> None
+  in
+  let name_from_static_property_expr expr =
+    match name_from_string_literal_expr expr with
+    | Some _ as field_name -> field_name
+    | None -> (
+        match expr.G.e with
+        | G.N key_name -> name_from_name_mapping string_constant_mappings key_name
+        | _ -> None)
   in
   let field_name_from_entity entity =
     match entity.G.name with
@@ -1010,6 +1019,27 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
         super#visit_definition () def
     end
   in
+  let record_string_constant_mapping var_name init_expr =
+    match name_from_string_literal_expr init_expr with
+    | Some field_name ->
+        string_constant_mappings :=
+          (var_name, field_name) :: !string_constant_mappings
+    | None -> ()
+  in
+  let string_constant_visitor =
+    object
+      inherit [_] G.iter as super
+
+      method! visit_definition () def =
+        (match def with
+        | entity, G.VarDef { G.vinit = Some init_expr; _ } -> (
+            match entity.G.name with
+            | G.EN var_name -> record_string_constant_mapping var_name init_expr
+            | _ -> ())
+        | _ -> ());
+        super#visit_definition () def
+    end
+  in
 
   let visitor =
     object
@@ -1180,6 +1210,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
     end
   in
 
+  string_constant_visitor#visit_program () ast;
   function_return_visitor#visit_program () ast;
   visitor#visit_program () ast;
   !object_mappings
