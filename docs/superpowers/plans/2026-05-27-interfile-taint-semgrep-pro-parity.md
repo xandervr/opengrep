@@ -44,7 +44,7 @@
 - JavaScript and TypeScript constructor-assigned helper instances now resolve when constructors assign `this.source = new Source()` and later methods call `this.source.getInput()`.
 - TypeScript constructor parameter properties now resolve when a typed parameter property such as `constructor(private source: Source)` is later used through `this.source.getInput()`.
 - Callback-body-sink flows are now covered across Ruby, Scala, Rust, Swift, Elixir, and Clojure syntax forms.
-- JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, chained map, and container API service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
+- JavaScript constructor-parameter helper instances now resolve when constructors assign `this.source = source` and a call site passes `new Source()`, a local helper alias, a simple reassigned helper alias, a simple factory-returned helper, a factory-local helper alias, an arrow-function factory helper, a simple higher-order factory, a callable factory variable alias, a service-container object property, string-keyed, constant-keyed, computed-keyed, map-like, template-keyed, chained map, container API, and provider-binding service-container object properties, a service-container factory return, service-container factory aliases, direct destructuring from service-container factory returns, composed service-container factory returns, a destructured service-container property, a nested service-container property path, a mutated service-container property assignment, a spread service-container property, a rest service-container property, a nested mutated service-container alias, an object factory property, an inline object factory property, object factory property aliases, mutated object factory property aliases, or a same-class conditional branch alias into `new App(...)`.
 
 **Latest pushed checkpoints:**
 - `7fcd695b511d5aa8b3542a410f79052c68211531` - `feat: add interfile taint analysis`
@@ -108,6 +108,7 @@
 - `f33f7f57a3aab6dbd09d97c2a0ed4f638c708d99` - `fix: resolve javascript template keyed service containers` (unsigned for the same local signing issue)
 - `d5e524a1f1c109c7df8e143951efdf4b2cdf343e` - `fix: resolve javascript chained map service containers` (unsigned for the same local signing issue)
 - `057956e4d0127c6d0f04b17d204e258978cd67e6` - `fix: resolve javascript container api service containers` (unsigned for the same local signing issue)
+- `85795edefb26c2729b85454c5e0f313591250a96` - `fix: resolve javascript provider service containers` (unsigned for the same local signing issue)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -289,7 +290,7 @@ python count=1 errors=0 interfile_lang_count=1
 js count=1 errors=0 interfile_lang_count=1
 ```
 
-Latest broad Docker direct scan matrix after `057956e4`:
+Latest broad Docker direct scan matrix after `85795ede`:
 
 ```text
 taint_interfile_js count=1 expected=1 errors=0 interfile_lang_count=1
@@ -314,6 +315,7 @@ taint_interfile_js_constructor_parameter_map_service_container count=3 expected=
 taint_interfile_js_constructor_parameter_template_keyed_service_container count=3 expected=3 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_chained_map_service_container count=3 expected=3 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_container_api_service_container count=3 expected=3 errors=0 interfile_lang_count=1
+taint_interfile_js_constructor_parameter_provider_container count=3 expected=3 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_service_container_factory count=2 expected=2 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_service_container_factory_alias count=3 expected=3 errors=0 interfile_lang_count=1
 taint_interfile_js_constructor_parameter_service_container_factory_destructuring count=3 expected=3 errors=0 interfile_lang_count=1
@@ -1115,9 +1117,45 @@ Current verification after the fix:
 - `git diff --check` passes.
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
-Boundary note: direct constructor-argument object shapes, simple local helper aliases, simple alias reassignments, simple factory-returned constructor helpers, factory-local helper aliases, variable-assigned arrow factories, simple higher-order factories, callable factory variable aliases, service-container object properties, static string-keyed, constant-keyed, simple computed-keyed, simple map-like, simple template-keyed, simple chained-map, and explicit container API service-container object properties, service-container factory returns, service-container factory aliases, direct destructuring from service-container factory returns, simple composed service-container factory returns, destructured service-container properties, nested service-container property paths, mutated service-container property assignments, object-spread service containers, object-rest service containers, nested mutated service-container aliases, object factory properties, inline object factory properties, object factory property aliases, mutated object factory property aliases, and same-class conditional branch aliases are covered. Broader dependency-injection forms remain unaudited, including framework/container injection, dynamic template expressions, and dynamic container keys.
+Boundary note: direct constructor-argument object shapes, simple local helper aliases, simple alias reassignments, simple factory-returned constructor helpers, factory-local helper aliases, variable-assigned arrow factories, simple higher-order factories, callable factory variable aliases, service-container object properties, static string-keyed, constant-keyed, simple computed-keyed, simple map-like, simple template-keyed, simple chained-map, explicit container API, and provider-binding service-container object properties, service-container factory returns, service-container factory aliases, direct destructuring from service-container factory returns, simple composed service-container factory returns, destructured service-container properties, nested service-container property paths, mutated service-container property assignments, object-spread service containers, object-rest service containers, nested mutated service-container aliases, object factory properties, inline object factory properties, object factory property aliases, mutated object factory property aliases, and same-class conditional branch aliases are covered. Broader dependency-injection forms remain unaudited, including decorator/metadata-based framework injection, dynamic template expressions, and dynamic container keys.
 
-Next resume point: continue auditing broader dependency-injection object-shape forms, especially framework/container injection, dynamic template expressions, dynamic container keys, and additional library-specific container APIs.
+Next resume point: continue auditing broader dependency-injection object-shape forms, especially decorator/metadata-based framework injection, dynamic template expressions, dynamic container keys, and additional library-specific provider APIs.
+
+---
+
+## Latest Session Update: JavaScript Provider Service Containers Green
+
+JavaScript provider-style service containers now preserve object-property mappings through Inversify-style binding chains such as `container.bind("source").to(Source)` followed by `container.get("source")`.
+
+- `src/tainting/Object_initialization.ml` now recognizes provider methods `to`, `toConstantValue`, and `toDynamicValue` after a static keyed `bind`/`register`/`set` call.
+- Bare class references are treated as constructed providers only inside `.to(ClassName)`, not as general object instances.
+- `cli/tests/default/e2e/rules/taint_interfile_js_constructor_parameter_provider_container.yaml` and `targets/taint_interfile_js_constructor_parameter_provider_container/` lock class-provider, constant-value-provider, and dynamic-value-provider forms.
+
+Red proof before the fix:
+
+```text
+taint_interfile_js_constructor_parameter_provider_container count=0 expected=3 errors=0 interfile_lang_count=1
+```
+
+Green proof after provider binding recognition:
+
+```text
+taint_interfile_js_constructor_parameter_provider_container count=3 expected=3 errors=0 interfile_lang_count=1
+rules.taint_interfile_js_constructor_parameter_provider_container    targets/taint_interfile_js_constructor_parameter_provider_container/bind_to_class/app.js    9
+rules.taint_interfile_js_constructor_parameter_provider_container    targets/taint_interfile_js_constructor_parameter_provider_container/bind_to_constant/app.js    9
+rules.taint_interfile_js_constructor_parameter_provider_container    targets/taint_interfile_js_constructor_parameter_provider_container/bind_to_dynamic/app.js    9
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes.
+- Full direct regression matrix passes with `matrix_failures=0`, including `taint_interfile_js_constructor_parameter_provider_container count=3`, `taint_interfile_js_constructor_parameter_container_api_service_container count=3`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+
+Boundary note: provider chains are covered for static keys and provider values expressed as class references, constructed constants, or dynamic lambda returns. Runtime-dependent keys, decorator/metadata-based framework injection, and unlisted provider APIs remain unaudited.
+
+Next resume point: continue auditing broader dependency-injection object-shape forms, especially decorator/metadata-based framework injection, dynamic template expressions, dynamic container keys, and additional library-specific provider APIs.
 
 ---
 
@@ -1151,9 +1189,9 @@ Current verification after the fix:
 - `git diff --check` passes.
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 
-Boundary note: explicit non-Map method pairs are covered for static keys and known constructed values. Runtime-dependent keys, framework-specific injection decorators/metadata, and unlisted library-specific APIs remain unaudited.
+Boundary note: explicit non-Map method pairs are covered for static keys and known constructed values. Runtime-dependent keys, decorator/metadata-based framework injection, and unlisted library-specific APIs remain unaudited.
 
-Next resume point: continue auditing broader dependency-injection object-shape forms, especially framework/container injection, dynamic template expressions, dynamic container keys, and additional library-specific container APIs.
+Next resume point: continue auditing broader dependency-injection object-shape forms, especially decorator/metadata-based framework injection, dynamic template expressions, dynamic container keys, and additional library-specific provider APIs.
 
 ---
 
