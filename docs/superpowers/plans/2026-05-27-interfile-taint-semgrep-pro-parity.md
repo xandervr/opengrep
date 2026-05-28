@@ -47,6 +47,7 @@
 - TypeScript decorated constructor-parameter injection now resolves when `constructor(@Inject("source") source) { this.source = source }` consumes a static provider binding.
 - TypeScript decorated constructor-parameter direct injection now resolves when `constructor(@Inject("source") source) { sink(source.getInput()) }` consumes a static provider binding without assigning the parameter to a field.
 - TypeScript decorated metadata injection now resolves when keyless `@Inject()` decorators rely on TypeScript class metadata for decorated fields, direct constructor parameters, and constructor parameters assigned to fields.
+- TypeScript injectable constructor metadata now resolves when DI-decorated classes such as `@Injectable()` use typed constructor parameters without explicit `@Inject()` keys or call-site arguments.
 - JavaScript dynamic service-container keys now resolve when the same unknown key variable is used for both provider write and consumer read, covering bracket assignment, `Map`-style `set`/`get`, and provider `bind(...).to(...)` plus `get(...)`.
 - JavaScript dynamic template-expression service-container keys now resolve when the same non-static template expression is used on both provider and consumer sides.
 - JavaScript provider method aliases now resolve through `asClass`, `asValue`, and `asFunction`, matching the existing class/value/factory provider semantics.
@@ -126,6 +127,7 @@
 - `7f1708e24` - `fix: resolve javascript provider method aliases` (unsigned for the same local signing issue)
 - `d0d32bdf0` - `fix: resolve javascript registration map containers` (unsigned for the same local signing issue)
 - `14c75e4c5` - `fix: resolve typescript decorated metadata injection` (signed)
+- `8dd119409` - `fix: resolve typescript injectable constructor metadata` (signed)
 
 **Resolved decision:** Track A was chosen for `generic`/`regex`: keep interfile taint scoped to dedicated-parser languages. Semgrep's current public docs describe interfile analysis as a Semgrep Pro feature for a subset of languages and list Generic as `N/a` in Semgrep Code support, while OpenGrep's `Xtarget` documents that generic/regex analyzers do not have a lazy AST. Implementing real taint support for these analyzers would require a separate non-AST dataflow engine, not a small fallback.
 
@@ -149,7 +151,7 @@ The Docker-built help text now says:
     not support taint mode.
 ```
 
-**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys or TypeScript decorator metadata, such as runtime/reflection-only metadata, hierarchical/scoped containers, async providers, and additional library-specific provider APIs. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
+**Immediate resume point:** continue the broader Semgrep Pro parity audit. Prioritize remaining framework DI forms that are not covered by static provider keys, keyless TypeScript decorator metadata, or DI-class constructor type metadata, such as metadata without statically visible class types, hierarchical/scoped containers, async providers, and additional library-specific provider APIs. Do not reopen generic/regex unless the user explicitly wants non-Semgrep-Pro behavior for those extended analyzers.
 
 **Next concrete actions:**
 
@@ -307,7 +309,7 @@ python count=1 errors=0 interfile_lang_count=1
 js count=1 errors=0 interfile_lang_count=1
 ```
 
-Latest broad Docker direct scan matrix after `14c75e4c5`:
+Latest broad Docker direct scan matrix after `8dd119409`:
 
 ```text
 taint_interfile_js count=1 expected=1 errors=0 interfile_lang_count=1
@@ -358,6 +360,7 @@ taint_interfile_typescript_decorated_property_injection count=1 expected=1 error
 taint_interfile_typescript_decorated_constructor_parameter_injection count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_typescript_decorated_constructor_parameter_direct_injection count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_typescript_decorated_metadata_injection count=3 expected=3 errors=0 interfile_lang_count=1
+taint_interfile_typescript_injectable_constructor_metadata count=2 expected=2 errors=0 interfile_lang_count=1
 taint_interfile_js_sanitizer count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_js_propagator count=1 expected=1 errors=0 interfile_lang_count=1
 taint_interfile_imported_value_package_collision count=2 expected=2 errors=0 interfile_lang_count=2
@@ -512,7 +515,7 @@ Verified in this handoff:
 
 Known boundaries:
 - `generic` and `regex` are extended non-AST analyzers, not parser-backed target languages. Taint mode now rejects them with a structured `SemgrepError` and CLI help documents that they do not support taint mode.
-- Untyped JavaScript constructor-parameter injection for direct constructor calls such as `constructor(source) { this.source = source }` with `new App(new Source())` is now covered. Local helper aliases, simple reassignments, simple factory-returned constructor helpers, factory-local helper aliases, arrow-function factories, simple higher-order factories, callable factory variable aliases, service-container object properties, service-container factory returns, service-container factory aliases, destructured service-container properties, nested service-container property paths, mutated service-container property assignments, spread service-container properties, rest service-container properties, nested mutated service-container aliases, object factory properties, inline object factory properties, object factory property aliases, mutated object factory property aliases, and same-class conditional branch aliases are covered. TypeScript keyless decorator metadata is covered when `@Inject()` has a class type annotation on a field or constructor parameter. Broader dependency-injection object-shape variants remain unaudited, including runtime/reflection-only metadata, hierarchical/scoped containers, async providers, framework-specific injection containers, and deeper factory composition.
+- Untyped JavaScript constructor-parameter injection for direct constructor calls such as `constructor(source) { this.source = source }` with `new App(new Source())` is now covered. Local helper aliases, simple reassignments, simple factory-returned constructor helpers, factory-local helper aliases, arrow-function factories, simple higher-order factories, callable factory variable aliases, service-container object properties, service-container factory returns, service-container factory aliases, destructured service-container properties, nested service-container property paths, mutated service-container property assignments, spread service-container properties, rest service-container properties, nested mutated service-container aliases, object factory properties, inline object factory properties, object factory property aliases, mutated object factory property aliases, and same-class conditional branch aliases are covered. TypeScript keyless decorator metadata and DI-class constructor type metadata are covered when class type annotations are statically visible. Broader dependency-injection object-shape variants remain unaudited, including metadata without statically visible class types, hierarchical/scoped containers, async providers, framework-specific injection containers, and deeper factory composition.
 - PHP callback-body-sink syntax remains blocked by parser/AST lowering for anonymous and arrow functions: current dumps drop lambda parameters and sink call arguments, so the taint engine cannot follow the callback argument into `sink($value)`. PHP callback-return syntax remains covered.
 - Do not claim full Semgrep Pro parity until a requirement-by-requirement audit proves it.
 
@@ -1150,6 +1153,44 @@ Next resume point: continue auditing broader dependency-injection object-shape f
 ---
 
 
+## Latest Session Update: TypeScript Injectable Constructor Metadata Green
+
+TypeScript DI-class constructor metadata now preserves object mappings when a class decorator such as `@Injectable()` marks a class as framework-managed and its constructor parameters have class type annotations but no explicit `@Inject()` provider key.
+
+- `src/tainting/Object_initialization.ml` now recognizes DI class decorators such as `Injectable`, `Component`, `Controller`, `Service`, `Directive`, and `Resolver`.
+- Constructor parameter class metadata is used only when the containing class has one of those DI decorators and the parameter does not already have a static provider key.
+- Typed constructor parameters get direct object mappings, and assignments such as `this.source = source` record field mappings for later method calls.
+- `cli/tests/default/e2e/rules/taint_interfile_typescript_injectable_constructor_metadata.yaml` and `targets/taint_interfile_typescript_injectable_constructor_metadata/` lock both direct constructor-parameter and constructor-parameter-to-field flows.
+
+Red proof before DI-class constructor metadata mapping:
+
+```text
+injectable_constructor_metadata count=0 expected=2 errors=0 interfile=TypeScript
+```
+
+Green proof after DI-class constructor metadata mapping:
+
+```text
+injectable_metadata_green count=2 expected=2 errors=0 interfile=TypeScript
+rules.taint_interfile_typescript_injectable_constructor_metadata    targets/taint_interfile_typescript_injectable_constructor_metadata/direct/app.ts    10
+rules.taint_interfile_typescript_injectable_constructor_metadata    targets/taint_interfile_typescript_injectable_constructor_metadata/field/app.ts    16
+```
+
+Current verification after the fix:
+
+- Docker `make core` passes from the current working tree.
+- Focused scans pass for the new injectable constructor metadata fixture, the keyless decorator metadata fixture, constructor parameter properties, and the existing explicit-key decorator injection fixtures.
+- Full direct regression matrix passes with `matrix_failures=0`, including `taint_interfile_typescript_injectable_constructor_metadata count=2`, `taint_interfile_typescript_decorated_metadata_injection count=3`, `taint_interfile_language_matrix count=28`, and `taint_interfile_parser_smoke count=13`.
+- `git diff --check` passes.
+- `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
+- Commit `8dd119409` is signed and pushed.
+
+Boundary note: DI-class constructor metadata is covered when a recognized class decorator and a statically visible class type annotation are present. Metadata without statically visible class types, hierarchical/scoped containers, async providers, and additional framework-specific provider APIs remain unaudited.
+
+Next resume point: continue auditing DI forms that require container-specific semantics beyond static provider keys and TypeScript class type metadata.
+
+---
+
 ## Latest Session Update: TypeScript Decorated Metadata Injection Green
 
 TypeScript keyless decorator metadata now preserves object mappings when `@Inject()` does not name a provider key and the decorated field or constructor parameter has a class type annotation.
@@ -1183,7 +1224,7 @@ Current verification after the fix:
 - `python3 -m py_compile cli/tests/default/e2e/test_taint_interfile.py` passes.
 - Commit `14c75e4c5` is signed and pushed.
 
-Boundary note: keyless TypeScript decorator metadata is covered when class metadata is available as a field or parameter type annotation. Runtime/reflection-only metadata, hierarchical/scoped containers, async providers, and framework-specific provider APIs remain unaudited.
+Boundary note: keyless TypeScript decorator metadata is covered when class metadata is available as a field or parameter type annotation. DI-class constructor type metadata is covered in `8dd119409`. Metadata without statically visible class types, hierarchical/scoped containers, async providers, and framework-specific provider APIs remain unaudited.
 
 Next resume point: continue auditing broader dependency-injection forms that are not covered by static provider keys or TypeScript decorator type metadata.
 
