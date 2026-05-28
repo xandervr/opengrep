@@ -391,6 +391,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
   let is_inject_attribute_name =
     method_name_matches [ "Inject"; "Autowired" ]
   in
+  let has_inject_attribute attrs =
+    attrs
+    |> List.exists (function
+         | G.NamedAttr (_, attr_name, _) -> is_inject_attribute_name attr_name
+         | _ -> false)
+  in
   let injected_key_from_attrs attrs =
     attrs
     |> List.find_map (function
@@ -524,18 +530,23 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
            same_resolved_path [ field_name ] mapped_path)
     |> Option.map (fun (_mapped_obj, _mapped_path, class_name) -> class_name)
   in
+  let normalized_injected_field_name field_name =
+    match string_of_name field_name with
+    | Some field_name -> name_from_static_string_value field_name
+    | None -> field_name
+  in
   let record_injected_field_mapping field_name injected_key =
-    let field_name =
-      match string_of_name field_name with
-      | Some field_name -> name_from_static_string_value field_name
-      | None -> field_name
-    in
+    let field_name = normalized_injected_field_name field_name in
     injected_field_mappings :=
       (field_name, injected_key) :: !injected_field_mappings;
     match class_name_from_injected_provider_key injected_key with
     | Some class_name ->
         object_mappings := (field_name, class_name) :: !object_mappings
     | None -> ()
+  in
+  let record_injected_metadata_class_mapping field_name class_name =
+    object_mappings :=
+      (normalized_injected_field_name field_name, class_name) :: !object_mappings
   in
   let class_name_from_direct_object_property_factory obj_name field_path =
     !object_property_factory_return_mappings
@@ -719,12 +730,36 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                | None -> None)
            | _ -> None)
     in
+    let injected_param_classes =
+      Tok.unbracket fdef.G.fparams
+      |> List.filter_map (function
+           | G.Param
+               {
+                 G.pname = Some ((param_name, _));
+                 ptype = Some param_type;
+                 pattrs;
+                 pinfo;
+                 _;
+               }
+             when has_inject_attribute pattrs
+                  && Option.is_none (injected_key_from_attrs pattrs) -> (
+               match class_name_from_type param_type with
+               | Some class_name -> Some (param_name, pinfo, class_name)
+               | None -> None)
+           | _ -> None)
+    in
     let param_index param_name = List.assoc_opt param_name param_indexes in
     let injected_param_key param_name =
       injected_param_keys
       |> List.find_opt (fun (mapped_param_name, _pinfo, _injected_key) ->
              String.equal mapped_param_name param_name)
       |> Option.map (fun (_param_name, _pinfo, injected_key) -> injected_key)
+    in
+    let injected_param_class param_name =
+      injected_param_classes
+      |> List.find_opt (fun (mapped_param_name, _pinfo, _class_name) ->
+             String.equal mapped_param_name param_name)
+      |> Option.map (fun (_param_name, _pinfo, class_name) -> class_name)
     in
     injected_param_keys
     |> List.iter (fun (param_name, pinfo, injected_key) ->
@@ -735,6 +770,12 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                   class_name)
                  :: !object_mappings
            | None -> ());
+    injected_param_classes
+    |> List.iter (fun (param_name, pinfo, class_name) ->
+           object_mappings :=
+             (G.Id ((param_name, Tok.unsafe_fake_tok param_name), pinfo),
+              class_name)
+             :: !object_mappings);
     let visitor =
       object
         inherit [_] G.iter as super
@@ -758,6 +799,11 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                   (match injected_param_key param_name with
                   | Some injected_key ->
                       record_injected_field_mapping field_name injected_key
+                  | None -> ());
+                  (match injected_param_class param_name with
+                  | Some class_name ->
+                      record_injected_metadata_class_mapping field_name
+                        class_name
                   | None -> ())
               | None -> ())
           | _ -> ());
@@ -1037,10 +1083,18 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
              | _ -> ())
     | _ -> ()
   in
-  let record_injected_property_mapping entity =
+  let record_injected_property_mapping entity vtype =
     match (entity.G.name, injected_key_from_attrs entity.G.attrs) with
     | G.EN field_name, Some injected_key ->
         record_injected_field_mapping field_name injected_key
+    | G.EN field_name, None when has_inject_attribute entity.G.attrs -> (
+        match vtype with
+        | Some field_type -> (
+            match class_name_from_type field_type with
+            | Some class_name ->
+                record_injected_metadata_class_mapping field_name class_name
+            | None -> ())
+        | None -> ())
     | _ -> ()
   in
   let record_object_property_assignment_mapping lval_expr rval_expr =
@@ -1449,7 +1503,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
             | G.VarDef var_def -> (
                 match (entity.G.name, var_def.G.vinit) with
                 | G.EN var_name, Some init_expr -> (
-                    record_injected_property_mapping entity;
+                    record_injected_property_mapping entity var_def.G.vtype;
                     record_object_property_mappings var_name init_expr;
                     record_object_property_set_chain_mapping var_name init_expr;
                     record_object_property_provider_mapping init_expr;
@@ -1577,7 +1631,7 @@ let detect_object_initialization (ast : G.program) (lang : Lang.t) :
                 | Some cls ->
                     object_mappings := (var_name, cls) :: !object_mappings
                 | _ -> ())
-            | G.EN _, None -> record_injected_property_mapping entity
+            | G.EN _, None -> record_injected_property_mapping entity var_def.G.vtype
             | _ -> ())
         | _, G.FuncDef fdef ->
             Tok.unbracket fdef.G.fparams
