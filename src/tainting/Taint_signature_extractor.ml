@@ -311,25 +311,6 @@ let extract_signature (taint_inst : TRI.t) ?(in_env : Taint_lval_env.t option)
     (func_cfg : IL.fun_cfg) : extraction_result =
   let params = Signature.of_IL_params func_cfg.params in
   let param_assumptions = mk_param_assumptions ~taint_inst func_cfg.params in
-  let normalize_file file = Fpath.to_string (Fpath.normalize file) in
-  let function_file =
-    match name with
-    | None -> None
-    | Some name ->
-        let file, _line, _col =
-          Function_id.to_file_line_col (Function_id.of_il_name name)
-        in
-        if String.equal file "unknown" then None else Some file
-  in
-  let sink_is_in_function_file (sink_info : Effect.taints_to_sink) =
-    match function_file with
-    | None -> true
-    | Some function_file ->
-        let start_loc, _end_loc =
-          sink_info.sink.pm.Core_match.range_loc
-        in
-        String.equal function_file (normalize_file start_loc.pos.file)
-  in
   let combined_env =
     match in_env with
     | Some env -> Taint_lval_env.union env param_assumptions
@@ -345,10 +326,16 @@ let extract_signature (taint_inst : TRI.t) ?(in_env : Taint_lval_env.t option)
          (fun acc eff ->
            match eff with
            | Effect.ToSink sink_info ->
-               if not (sink_is_in_function_file sink_info) then acc
-               else
-                 let param_labels = extract_param_labels_from_sink sink_info in
-                 if param_labels <> [] then
+               (* Keep ToSink effects whose sink lives in a different file than
+                * this function. Such effects arise from transitive cross-file
+                * composition (this function forwards a tainted parameter into a
+                * callee -- possibly in another file -- that reaches the sink),
+                * which is exactly what inter-file taint must propagate. The
+                * finding is still reported at the real sink location. (In
+                * single-file/intra-file analysis every sink is in this file, so
+                * this is a no-op there.) *)
+               let param_labels = extract_param_labels_from_sink sink_info in
+               if param_labels <> [] then
                    let filtered_labels =
                      List.filter (fun label -> label <> "__SOURCE__") param_labels
                    in
