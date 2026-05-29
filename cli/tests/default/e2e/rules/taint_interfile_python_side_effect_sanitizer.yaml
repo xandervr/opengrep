@@ -1,0 +1,18 @@
+rules:
+  - id: taint_interfile_python_side_effect_sanitizer
+    mode: taint
+    languages:
+      - python
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sanitizers:
+      - patterns:
+          - pattern: sanitize($X)
+          - focus-metavariable: $X
+        by-side-effect: true
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile side-effect sanitizer
+    severity: WARNING

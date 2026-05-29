@@ -49,8 +49,17 @@ let extract_param_labels_from_sink (sink_info : Effect.taints_to_sink) :
          | _ -> acc)
        []
 
-(* Extract this.x and self.x properties from a function definition *)
-let extract_method_properties (fdef : G.function_definition) :
+let enclosed_vars_are_implicit_instance_fields lang =
+  Lang.equal lang Lang.Java || Lang.equal lang Lang.Csharp
+  || Lang.equal lang Lang.Kotlin
+
+let implicit_this_property (expr : G.expr) id id_info : G.expr =
+  let tok = snd id in
+  let this_expr = { expr with G.e = G.IdSpecial (G.This, tok) } in
+  { expr with G.e = G.DotAccess (this_expr, tok, G.FN (G.Id (id, id_info))) }
+
+(* Extract this.x/self.x properties and implicit this fields from a method. *)
+let extract_method_properties ~(lang : Lang.t) (fdef : G.function_definition) :
     G.expr list =
   let found_properties = ref [] in
   let visitor =
@@ -59,6 +68,13 @@ let extract_method_properties (fdef : G.function_definition) :
 
       method! visit_expr () expr =
         (match expr.G.e with
+        | G.N (G.Id (id, id_info))
+          when enclosed_vars_are_implicit_instance_fields lang -> (
+            match !(id_info.G.id_resolved) with
+            | Some (G.EnclosedVar, _) ->
+                found_properties :=
+                  implicit_this_property expr id id_info :: !found_properties
+            | _ -> ())
         | G.DotAccess (obj, _, G.FN (G.Id (_, _))) -> (
             (* Check if base object is IdSpecial This or Self *)
             match obj.G.e with
@@ -208,8 +224,88 @@ let mk_param_assumptions ?taint_inst (params : IL.param list) : Taint_lval_env.t
   in
   env
 
+let max_bash_arg_index_in_taint acc (taint : Taint.taint) =
+  match taint.Taint.orig with
+  | Taint.Var { base = Taint.BArg { index; _ }; _ } when index >= 0 -> (
+      match acc with
+      | None -> Some index
+      | Some prev -> Some (max prev index))
+  | _ -> acc
+
+let max_bash_arg_index_in_taints acc taints =
+  Taint.Taint_set.fold
+    (fun taint acc -> max_bash_arg_index_in_taint acc taint)
+    taints acc
+
+let max_bash_arg_index_in_shape acc = function
+  | Shape.Arg { index; _ } when index >= 0 -> (
+      match acc with
+      | None -> Some index
+      | Some prev -> Some (max prev index))
+  | _ -> acc
+
+let max_bash_arg_index_in_effect acc = function
+  | Effect.ToReturn return_info ->
+      let acc =
+        max_bash_arg_index_in_taints acc return_info.data_taints
+      in
+      max_bash_arg_index_in_shape acc return_info.data_shape
+  | Effect.ToSink sink_info ->
+      let taints_items, _ = sink_info.taints_with_precondition in
+      taints_items
+      |> List.fold_left
+           (fun acc (item : Effect.taint_to_sink_item) ->
+             max_bash_arg_index_in_taint acc item.taint)
+           acc
+  | Effect.ToLval (taints, lval) ->
+      let acc = max_bash_arg_index_in_taints acc taints in
+      (match lval.Taint.base with
+      | Taint.BArg { index; _ } when index >= 0 -> (
+          match acc with
+          | None -> Some index
+          | Some prev -> Some (max prev index))
+      | _ -> acc)
+  | Effect.CleanLval lval -> (
+      match lval.Taint.base with
+      | Taint.BArg { index; _ } when index >= 0 -> (
+          match acc with
+          | None -> Some index
+          | Some prev -> Some (max prev index))
+      | _ -> acc)
+  | Effect.ToSinkInCall { args_taints; _ } ->
+      args_taints
+      |> List.fold_left
+           (fun acc arg ->
+             match arg with
+             | IL.Unnamed (taints, shape)
+             | IL.Named (_, (taints, shape)) ->
+                 let acc = max_bash_arg_index_in_taints acc taints in
+                 max_bash_arg_index_in_shape acc shape)
+           acc
+
+let add_bash_implicit_params_from_effects lang params effects =
+  if not (Lang.equal lang Lang.Bash) then params
+  else
+    let max_index =
+      Effects.fold
+        (fun eff acc -> max_bash_arg_index_in_effect acc eff)
+        effects None
+    in
+    match max_index with
+    | None -> params
+    | Some max_index ->
+        let needed = max_index + 1 in
+        if List.length params >= needed then params
+        else
+          let existing = List.length params in
+          params
+          @ List.init (needed - existing) (fun i ->
+                let n = existing + i + 1 in
+                Signature.P ("$" ^ string_of_int n))
+
 let extract_signature (taint_inst : TRI.t) ?(in_env : Taint_lval_env.t option)
     ?(name : IL.name option) ?(signature_db : signature_database option)
+    ?(class_name : string option)
     ?(builtin_signature_db : Shape_and_sig.builtin_signature_database option)
     ?(call_graph : Call_graph.G.t option = None)
     (func_cfg : IL.fun_cfg) : extraction_result =
@@ -222,7 +318,7 @@ let extract_signature (taint_inst : TRI.t) ?(in_env : Taint_lval_env.t option)
   in
   let fixpoint_effects, mapping =
     Dataflow_tainting.fixpoint taint_inst ~in_env:combined_env ?name
-      ?signature_db ?builtin_signature_db ?call_graph func_cfg
+      ?class_name ?signature_db ?builtin_signature_db ?call_graph func_cfg
   in
   let effects_with_preconditions =
     fixpoint_effects |> Effects.elements
@@ -230,41 +326,49 @@ let extract_signature (taint_inst : TRI.t) ?(in_env : Taint_lval_env.t option)
          (fun acc eff ->
            match eff with
            | Effect.ToSink sink_info ->
+               (* Keep ToSink effects whose sink lives in a different file than
+                * this function. Such effects arise from transitive cross-file
+                * composition (this function forwards a tainted parameter into a
+                * callee -- possibly in another file -- that reaches the sink),
+                * which is exactly what inter-file taint must propagate. The
+                * finding is still reported at the real sink location. (In
+                * single-file/intra-file analysis every sink is in this file, so
+                * this is a no-op there.) *)
                let param_labels = extract_param_labels_from_sink sink_info in
                if param_labels <> [] then
-                 let filtered_labels =
-                   List.filter (fun label -> label <> "__SOURCE__") param_labels
-                 in
-                 let unique_labels =
-                   List.sort_uniq String.compare filtered_labels
-                 in
-                 let param_precondition =
-                   match unique_labels with
-                   | [] -> Rule.PBool true
-                   | [ label ] -> Rule.PVariable label
-                   | labels ->
-                       Rule.POr (List.map (fun l -> Rule.PVariable l) labels)
-                 in
-                 let taints_items, existing_precondition =
-                   sink_info.taints_with_precondition
-                 in
-                 (* Note there might be existing preconditions and we do not lose them. *)
-                 let combined_precondition =
-                   match (existing_precondition, param_precondition) with
-                   | Rule.PBool true, p -> p
-                   | Rule.PLabel "__SOURCE__", p -> p
-                   | e, Rule.PBool true -> e
-                   | e, p -> Rule.PAnd [ e; p ]
-                 in
-                 let updated_sink_info =
-                   {
-                     sink_info with
-                     taints_with_precondition =
-                       (taints_items, combined_precondition);
-                   }
-                 in
-                 Effects.add (Effect.ToSink updated_sink_info) acc
-               else Effects.add eff acc
+                   let filtered_labels =
+                     List.filter (fun label -> label <> "__SOURCE__") param_labels
+                   in
+                   let unique_labels =
+                     List.sort_uniq String.compare filtered_labels
+                   in
+                   let param_precondition =
+                     match unique_labels with
+                     | [] -> Rule.PBool true
+                     | [ label ] -> Rule.PVariable label
+                     | labels ->
+                         Rule.POr (List.map (fun l -> Rule.PVariable l) labels)
+                   in
+                   let taints_items, existing_precondition =
+                     sink_info.taints_with_precondition
+                   in
+                   (* Note there might be existing preconditions and we do not lose them. *)
+                   let combined_precondition =
+                     match (existing_precondition, param_precondition) with
+                     | Rule.PBool true, p -> p
+                     | Rule.PLabel "__SOURCE__", p -> p
+                     | e, Rule.PBool true -> e
+                     | e, p -> Rule.PAnd [ e; p ]
+                   in
+                   let updated_sink_info =
+                     {
+                       sink_info with
+                       taints_with_precondition =
+                         (taints_items, combined_precondition);
+                     }
+                   in
+                   Effects.add (Effect.ToSink updated_sink_info) acc
+                 else Effects.add eff acc
           | Effect.ToReturn return_info ->
               (* Retain return effects that carry any meaningful taint information.
                *
@@ -310,9 +414,14 @@ let extract_signature (taint_inst : TRI.t) ?(in_env : Taint_lval_env.t option)
                         | Taint.Control -> true (* Real control taint *))
                in
                if has_relevant_taint then Effects.add eff acc
-               else acc (* Skip only effects with no relevant taint *)
+             else acc (* Skip only effects with no relevant taint *)
+           | Effect.CleanLval _ -> Effects.add eff acc
            | Effect.ToSinkInCall _ -> Effects.add eff acc)
          Effects.empty
+  in
+  let params =
+    add_bash_implicit_params_from_effects taint_inst.lang params
+      effects_with_preconditions
   in
   let signature = { Signature.params; effects = effects_with_preconditions } in
   { signature; mapping }
@@ -385,6 +494,7 @@ let extract_signature_with_file_context
     ?(builtin_signature_db : Shape_and_sig.builtin_signature_database option)
     ~(name : IL.name)
     ?(method_properties : AST_generic.expr list = [])
+    ?(class_name : string option)
     ?(call_graph : Call_graph.G.t option = None)
     (taint_inst : Taint_rule_inst.t)
     func_cfg
@@ -405,7 +515,7 @@ let extract_signature_with_file_context
 
   let { signature; _ } =
     extract_signature taint_inst ~in_env:combined_global_env ~name
-      ~signature_db:db ?builtin_signature_db ~call_graph func_cfg
+      ~signature_db:db ?class_name ?builtin_signature_db ~call_graph func_cfg
   in
   let updated_db = Shape_and_sig.add_signature db (Function_id.of_il_name name) {sig_ = signature; arity} in
   (updated_db, signature)

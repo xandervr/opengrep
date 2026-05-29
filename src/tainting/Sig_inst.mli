@@ -8,6 +8,7 @@ type call_effect =
   | ToSink of Shape_and_sig.Effect.taints_to_sink
   | ToReturn of Shape_and_sig.Effect.taints_to_return
   | ToLval of Taint.taints * IL.name * Taint.offset list
+  | CleanLval of IL.name * Taint.offset list
   | ToSinkInCall of {
       callee : IL.exp;
       arg : Taint.arg;

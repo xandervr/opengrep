@@ -23,6 +23,7 @@ val extract_signature :
   ?in_env:Taint_lval_env.t ->
   ?name:IL.name ->
   ?signature_db:signature_database ->
+  ?class_name:string ->
   ?builtin_signature_db:Shape_and_sig.builtin_signature_database ->
   ?call_graph:Call_graph.G.t option ->
   IL.fun_cfg ->
@@ -43,6 +44,7 @@ val extract_signature_with_file_context :
   ?builtin_signature_db:Shape_and_sig.builtin_signature_database ->
   name:IL.name ->
   ?method_properties:AST_generic.expr list ->
+  ?class_name:string ->
   ?call_graph:Call_graph.G.t option ->
   Taint_rule_inst.t ->
   IL.fun_cfg ->
@@ -60,8 +62,9 @@ val show_signature_extraction :
 (** Pretty print signature extraction result *)
 
 val extract_method_properties :
-  AST_generic.function_definition -> AST_generic.expr list
-(** Extract this.x and self.x property accesses from a function definition *)
+  lang:Lang.t -> AST_generic.function_definition -> AST_generic.expr list
+(** Extract this.x/self.x property accesses and implicit this fields from a
+    method definition. *)
 
 
 val detect_object_initialization : AST_generic.program -> Lang.t -> (AST_generic.name * AST_generic.name) list

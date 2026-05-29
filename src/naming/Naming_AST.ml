@@ -822,14 +822,15 @@ class ['self] resolve_visitor env lang =
             (function
               | id, None
                 when Lang.is_js lang && fst id <> Ast_js.default_entity ->
-                  (* for JS we consider import { x } from 'a/b/foo' as foo.x.
+                  (* for JS we consider import { x } from 'a/b/foo' as
+                   * a/b/foo.x. Keeping the path disambiguates same-named
+                   * modules in different package directories.
                    * Note that we guard this code with is_js lang, because Python
                    * uses also Filename in 'from ...conf import x'.
                    *)
                   let sid = SId.mk () in
-                  let _, b, _ = Filename_.dbe_of_filename_noext_ok s in
-                  let base = (b, tok) in
-                  let canonical = dotted_to_canonical [ base; id ] in
+                  let module_path = (s, tok) in
+                  let canonical = dotted_to_canonical [ module_path; id ] in
                   let resolved =
                     untyped_ent (ImportedEntity canonical, sid)
                   in
@@ -838,9 +839,8 @@ class ['self] resolve_visitor env lang =
                 when Lang.is_js lang && fst id <> Ast_js.default_entity ->
                   (* for JS *)
                   let sid = SId.mk () in
-                  let _, b, _ = Filename_.dbe_of_filename_noext_ok s in
-                  let base = (b, tok) in
-                  let canonical = dotted_to_canonical [ base; id ] in
+                  let module_path = (s, tok) in
+                  let canonical = dotted_to_canonical [ module_path; id ] in
                   let resolved =
                     untyped_ent (ImportedEntity canonical, sid)
                   in
@@ -856,10 +856,14 @@ class ['self] resolve_visitor env lang =
           set_resolved env id_info resolved;
           add_ident_imported_scope alias resolved env.names
       | ImportAs (_, FileName (s, tok), Some (alias, id_info)) ->
-          (* for Go *)
           let sid = SId.mk () in
-          let pkgname = go_package_alias s in
-          let base = (pkgname, tok) in
+          let import_name =
+            if Lang.is_js lang then s
+            else
+              (* for Go *)
+              go_package_alias s
+          in
+          let base = (import_name, tok) in
           let canonical = dotted_to_canonical [ base ] in
           let resolved = untyped_ent (ImportedModule canonical, sid) in
           set_resolved env id_info resolved;
@@ -970,6 +974,11 @@ class ['self] resolve_visitor env lang =
             name_top = None;
           } ->
           (match name_middle with
+          | None
+          | Some (QDots []) -> (
+              match lookup_scope_opt id env with
+              | Some resolved -> set_resolved env id_info resolved
+              | None -> ())
           | Some (QDots ((m, None) :: rest_of_middle)) -> (
               match lookup_scope_opt m env with
               (* Resolve modules for OCaml *)

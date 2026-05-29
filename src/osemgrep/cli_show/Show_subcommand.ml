@@ -57,13 +57,10 @@ let json_of_v (v : OCaml.v) =
 (* mostly a copy paste of Core_CLI.dump_v_to_format *)
 let dump_any_to_format ~json ~html (any : AST_generic.any) =
   let (v : OCaml.v) = Meta_AST.vof_any any in
-  match json, html with
-  | true, false ->
-      J.string_of_json (json_of_v v)
-  | false, false ->
-      OCaml.string_of_v v
-  | _, true ->
-      Show_html.generate_html v
+  match (json, html) with
+  | true, false -> J.string_of_json (json_of_v v)
+  | false, false -> OCaml.string_of_v v
+  | _, true -> Show_html.generate_html v
 
 (*****************************************************************************)
 (* Main logic *)
@@ -120,7 +117,9 @@ let run_conf (caps : < caps ; .. >) (conf : Show_CLI.conf) : Exit_code.t =
       in
       (* 80 columns is too little *)
       UFormat.set_margin 120;
-      let s = dump_any_to_format ~json:conf.json ~html:conf.html (AST_generic.Pr ast) in
+      let s =
+        dump_any_to_format ~json:conf.json ~html:conf.html (AST_generic.Pr ast)
+      in
       print s;
       match (errors @ tolerated_errors, skipped_tokens @ inserted_tokens) with
       | [], [] -> Exit_code.ok ~__LOC__
@@ -144,34 +143,34 @@ let run_conf (caps : < caps ; .. >) (conf : Show_CLI.conf) : Exit_code.t =
       (match xs with
       | [] -> print "(none)"
       | _ -> xs |> List.iter (fun stmt -> print (IL.show_stmt stmt)));
-        let report_func_def_with_name ent_opt fdef =
-            let name =
-            match ent_opt with
-            | None -> "<lambda>"
-            | Some { G.name = EN n; _ } -> G.show_name n
-            | Some _ -> "<entity>"
-            in
-            print (spf "\n=== Function ===\nName: %s" name);
-            let s =
-            AST_generic.show_any
-                (G.S (AST_generic_helpers.funcbody_to_stmt fdef.G.fbody))
-            in
-            print s;
-            print "==>";
-
-            (* Creating a CFG and throwing it away here so the implicit return
-            * analysis pass may be run in order to mark implicit return nodes.
-            *)
-            let _ = CFG_build.cfg_of_gfdef lang fdef in
-
-            (* This round, the IL stmts will show return nodes when
-            * they were implicit before.
-            *)
-            let IL.{ fbody = xs; _ } = AST_to_IL.function_definition lang fdef in
-            let s = IL.show_any (IL.Ss xs) in
-            print s
+      let report_func_def_with_name ent_opt fdef =
+        let name =
+          match ent_opt with
+          | None -> "<lambda>"
+          | Some { G.name = EN n; _ } -> G.show_name n
+          | Some _ -> "<entity>"
         in
-        Visit_function_defs.visit report_func_def_with_name ast;
+        print (spf "\n=== Function ===\nName: %s" name);
+        let s =
+          AST_generic.show_any
+            (G.S (AST_generic_helpers.funcbody_to_stmt fdef.G.fbody))
+        in
+        print s;
+        print "==>";
+
+        (* Creating a CFG and throwing it away here so the implicit return
+         * analysis pass may be run in order to mark implicit return nodes.
+         *)
+        let _ = CFG_build.cfg_of_gfdef lang fdef in
+
+        (* This round, the IL stmts will show return nodes when
+         * they were implicit before.
+         *)
+        let IL.{ fbody = xs; _ } = AST_to_IL.function_definition lang fdef in
+        let s = IL.show_any (IL.Ss xs) in
+        print s
+      in
+      Visit_function_defs.visit report_func_def_with_name ast;
       Exit_code.ok ~__LOC__
   | DumpILPP (file, lang) ->
       let parse = Parse_target.parse_and_resolve_name lang file in
@@ -188,7 +187,7 @@ let run_conf (caps : < caps ; .. >) (conf : Show_CLI.conf) : Exit_code.t =
           | Some { G.name = EN n; _ } -> (
               match n with
               | G.Id ((s, _), _) -> s
-              | G.IdQualified { name_last = ((s, _), _); _ } -> s)
+              | G.IdQualified { name_last = (s, _), _; _ } -> s)
           | Some _ -> "<entity>"
         in
         (* Creating a CFG and throwing it away here so the implicit return
@@ -244,7 +243,7 @@ let run_conf (caps : < caps ; .. >) (conf : Show_CLI.conf) : Exit_code.t =
       let graph = Graph_from_AST.build_call_graph ~lang ast in
       Call_graph.Dot.output_graph stdout graph;
       Exit_code.ok ~__LOC__
-  | DumpTaintSignatures (rule_file, target_file) ->
+  | DumpTaintSignatures (rule_file, target_file) -> (
       let lang = Lang.lang_of_filename_exn target_file in
       let rules =
         match Parse_rule.parse rule_file with
@@ -255,9 +254,9 @@ let run_conf (caps : < caps ; .. >) (conf : Show_CLI.conf) : Exit_code.t =
                  (Fpath.to_string rule_file)
                  (Rule_error.string_of_error e))
       in
-      let has_disabled_intrafile (r: Rule.t) =
+      let has_disabled_intrafile (r : Rule.t) =
         match r.Rule.options with
-        | Some {taint_intrafile = false; _} -> true
+        | Some { taint_intrafile = false; _ } -> true
         | _ -> false
       in
       let applicable_rules, non_applicable_rules =
@@ -265,7 +264,7 @@ let run_conf (caps : < caps ; .. >) (conf : Show_CLI.conf) : Exit_code.t =
         |> List.partition (fun r ->
                match r.Rule.target_analyzer with
                | Xlang.L (x, xs) when not (has_disabled_intrafile r) ->
-                 List.mem lang (x :: xs)
+                   List.mem lang (x :: xs)
                | _ -> false)
       in
       let _search_rules, taint_rules, _extract_rules, _join_rules =
@@ -275,44 +274,56 @@ let run_conf (caps : < caps ; .. >) (conf : Show_CLI.conf) : Exit_code.t =
       if num_non_applicable > 0 then
         print
           (spf
-             "%d rule(s) were not applicable (check target_analyzer field \
-              and taint_intrafile rule option)"
+             "%d rule(s) were not applicable (check target_analyzer field and \
+              taint_intrafile rule option)"
              num_non_applicable);
-      (match taint_rules with
+      match taint_rules with
       | [] ->
           print "No applicable taint rules found";
           Exit_code.ok ~__LOC__
       | _ ->
-        List.iter
-          (fun rule ->
-            let xconf = Match_env.default_xconfig in
-            let xconf = { xconf with config = { xconf.config with taint_intrafile = true } } in
-            let xconf = Match_env.adjust_xconfig_with_rule_options xconf rule.Rule.options in
-            let tbl = Formula_cache.mk_specialized_formula_cache [] in
-            let xlang = Xlang.L (lang, []) in
-            let parser xlang file =
-              let { Parsing_result2.ast; skipped_tokens; _ } =
-                Parse_target.parse_and_resolve_name xlang file
+          List.iter
+            (fun rule ->
+              let xconf = Match_env.default_xconfig in
+              let xconf =
+                {
+                  xconf with
+                  config = { xconf.config with taint_intrafile = true };
+                }
               in
-              (ast, skipped_tokens)
-            in
-            let xtarget =
-              Xtarget.resolve parser (Target.mk_regular xlang Product.all (File target_file))
-            in
-            let _report, signature_db_opt =
-              Match_tainting_mode.check_rule tbl rule Fun.id xconf xtarget
-            in
-            begin match signature_db_opt with
-            | None ->
-                print (spf "Could not obtain taint signatures for rule %s:\n"
+              let xconf =
+                Match_env.adjust_xconfig_with_rule_options xconf
+                  rule.Rule.options
+              in
+              let tbl = Formula_cache.mk_specialized_formula_cache [] in
+              let xlang = Xlang.L (lang, []) in
+              let parser xlang file =
+                let { Parsing_result2.ast; skipped_tokens; _ } =
+                  Parse_target.parse_and_resolve_name xlang file
+                in
+                (ast, skipped_tokens)
+              in
+              let xtarget =
+                Xtarget.resolve parser
+                  (Target.mk_regular xlang Product.all (File target_file))
+              in
+              let _report, signature_db_opt, _sink_files, _shared_call_graph =
+                Match_tainting_mode.check_rule tbl rule Fun.id xconf xtarget
+              in
+              begin
+                match signature_db_opt with
+                | None ->
+                    print
+                      (spf "Could not obtain taint signatures for rule %s:\n"
+                         (Rule_ID.to_string (fst rule.Rule.id)))
+                | Some signature_db ->
+                    print
+                      (spf "Taint signatures for rule %s:\n"
                          (Rule_ID.to_string (fst rule.Rule.id)));
-            | Some signature_db ->
-                print (spf "Taint signatures for rule %s:\n"
-                         (Rule_ID.to_string (fst rule.Rule.id)));
-                print (Shape_and_sig.show_signature_database signature_db)
-            end)
-          taint_rules;
-        Exit_code.ok ~__LOC__)
+                    print (Shape_and_sig.show_signature_database signature_db)
+              end)
+            taint_rules;
+          Exit_code.ok ~__LOC__)
 
 (*****************************************************************************)
 (* Entry point *)

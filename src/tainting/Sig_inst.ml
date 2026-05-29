@@ -38,6 +38,7 @@ type call_effect =
   | ToSink of Effect.taints_to_sink
   | ToReturn of Effect.taints_to_return
   | ToLval of Taint.taints * IL.name * Taint.offset list
+  | CleanLval of IL.name * Taint.offset list
   | ToSinkInCall of {
       callee : IL.exp;
       arg : Taint.arg;
@@ -51,6 +52,9 @@ let show_call_effect = function
   | ToReturn ttr -> Effect.show_taints_to_return ttr
   | ToLval (taints, var, offset) ->
       Printf.sprintf "%s ----> %s%s" (T.show_taints taints) (IL.str_of_name var)
+        (T.show_offset_list offset)
+  | CleanLval (var, offset) ->
+      Printf.sprintf "clean(%s%s)" (IL.str_of_name var)
         (T.show_offset_list offset)
   | ToSinkInCall { callee; arg; _ } ->
       Printf.sprintf "ToSinkInCall(%s, %s)" (Display_IL.string_of_exp callee)
@@ -893,6 +897,21 @@ let rec instantiate_function_signature lval_env (taint_sig : Signature.t)
         in
         if Taints.is_empty taints then []
         else [ ToLval (taints, dst_var, dst_offset) ]
+    | Effect.CleanLval dst_sig_lval ->
+        let+ dst_var, dst_offset, _tok =
+          match args with
+          | None ->
+              Log.warn (fun m ->
+                  m
+                    "Cannot instantiate clean(%s) because we lack the actual \
+                     arguments"
+                    (T.show_lval dst_sig_lval));
+              None
+          | Some args ->
+              instantiate_lval_using_actual_exps callee taint_sig.params args
+                dst_sig_lval
+        in
+        [ CleanLval (dst_var, dst_offset) ]
     | Effect.ToSinkInCall
         { callee = fun_exp; arg = fun_arg; args_taints = fun_args_taints } -> (
         Log.debug (fun m ->

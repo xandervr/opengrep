@@ -103,6 +103,13 @@ let just_resolve_name lang ast =
   (* NOTE: It's better not to use this any more, since we are sharing the
    * module instance in AST_generic. *)
   (* AST_generic.SId.unsafe_reset_counter (); *)
+  let ast =
+    if Lang.equal lang Lang.Scheme then
+      AST_modifications.normalize_scheme_defines ast
+    else if Lang.equal lang Lang.Cairo then
+      AST_modifications.normalize_stmt_expr_block_function_bodies ast
+    else ast
+  in
   Naming_AST.resolve lang ast;
   (* In Ruby, bare unresolved identifiers are method calls. *)
   let ast =

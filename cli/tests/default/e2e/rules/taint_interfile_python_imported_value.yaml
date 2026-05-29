@@ -1,0 +1,13 @@
+rules:
+  - id: taint_interfile_python_imported_value
+    message: Taint should flow through imported Python module values
+    languages:
+      - python
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

@@ -62,12 +62,20 @@ let rec mark_first_instr_ancestor (cfg : IL.cfg) i =
 
 let lang_supports_implicit_return (lang : Lang.t) =
   match lang with
+  | Bash
+  | Cairo
   | Clojure
+  | Dart
   | Elixir
+  | Kotlin
+  | Lisp
+  | Move_on_aptos
+  | Move_on_sui
   | Ruby
   | Rust
   | Scala
-  | Julia ->
+  | Julia
+  | Ocaml ->
       true
   | _else_ -> false
 

@@ -1,0 +1,13 @@
+rules:
+  - id: taint_interfile_python_duplicate_names
+    message: Taint should not collapse same-named Python functions across files
+    languages:
+      - python
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

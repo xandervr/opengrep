@@ -1,0 +1,11 @@
+rules:
+  - id: taint_interfile_js_constructor_parameter_alias
+    message: Taint should flow through JavaScript constructor parameter alias helper instances
+    languages: [js]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

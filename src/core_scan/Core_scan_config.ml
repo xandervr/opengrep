@@ -56,6 +56,7 @@ type t = {
   report_time : bool;
   matching_explanations : bool;
   taint_intrafile : bool;
+  taint_interfile : bool;
   strict : bool;
   matching_conf : Match_patterns.matching_conf;
   (* respect or not the paths: directive in a rule. Useful to set to false
@@ -109,6 +110,7 @@ let default =
     report_time = false;
     matching_explanations = false;
     taint_intrafile = false;
+    taint_interfile = false;
     strict = false;
     matching_conf = Match_patterns.default_matching_conf;
     respect_rule_paths = true;

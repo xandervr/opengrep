@@ -1,0 +1,15 @@
+rules:
+  - id: taint_interfile_python_sanitizer
+    message: Sanitizers should apply through imported Python helpers
+    languages:
+      - python
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sanitizers:
+      - pattern: clean(...)
+    pattern-sinks:
+      - pattern: sink(...)

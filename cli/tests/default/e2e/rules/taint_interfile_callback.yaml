@@ -1,0 +1,24 @@
+rules:
+  - id: taint_interfile_callback_js
+    mode: taint
+    languages: [javascript]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: sourceReturn(...)
+      - pattern: sourceSink(...)
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile callback taint
+    severity: WARNING
+
+  - id: taint_interfile_callback_python
+    mode: taint
+    languages: [python]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source_return(...)
+      - pattern: source_sink(...)
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile callback taint
+    severity: WARNING

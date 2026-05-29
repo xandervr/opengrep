@@ -1,0 +1,162 @@
+rules:
+  - id: taint_interfile_smoke_dockerfile
+    mode: taint
+    languages: [dockerfile]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: RUN sink(source())
+    pattern-sinks:
+      - pattern: RUN sink(...)
+    message: Taint should run with interfile enabled for Dockerfile
+    severity: ERROR
+
+  - id: taint_interfile_smoke_html
+    mode: taint
+    languages: [html]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: <source />
+    pattern-sinks:
+      - pattern: <sink>...</sink>
+    message: Taint should run with interfile enabled for HTML
+    severity: ERROR
+
+  - id: taint_interfile_smoke_json
+    mode: taint
+    languages: [json]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: |
+          "source"
+    pattern-sinks:
+      - pattern: |
+          {"sink": ...}
+    message: Taint should run with interfile enabled for JSON
+    severity: ERROR
+
+  - id: taint_interfile_smoke_jsonnet
+    mode: taint
+    languages: [jsonnet]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source()
+    pattern-sinks:
+      - pattern: sink(...)
+    message: Taint should run with interfile enabled for Jsonnet
+    severity: ERROR
+
+  - id: taint_interfile_smoke_promql
+    mode: taint
+    languages: [promql]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source()
+    pattern-sinks:
+      - pattern: sink(...)
+    message: Taint should run with interfile enabled for PromQL
+    severity: ERROR
+
+  - id: taint_interfile_smoke_protobuf
+    mode: taint
+    languages: [protobuf]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: |
+          syntax = "proto3"; message Sink { string source = 1; }
+    pattern-sinks:
+      - pattern: |
+          syntax = "proto3"; message Sink { string source = 1; }
+    message: Taint should parse with interfile enabled for Protobuf
+    severity: ERROR
+
+  - id: taint_interfile_smoke_python2
+    mode: taint
+    languages: [python2]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source()
+    pattern-sinks:
+      - pattern: sink(...)
+    message: Taint should run with interfile enabled for Python 2
+    severity: ERROR
+
+  - id: taint_interfile_smoke_python3
+    mode: taint
+    languages: [python3]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source()
+    pattern-sinks:
+      - pattern: sink(...)
+    message: Taint should run with interfile enabled for Python 3
+    severity: ERROR
+
+  - id: taint_interfile_smoke_ql
+    mode: taint
+    languages: [ql]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source()
+    pattern-sinks:
+      - pattern: sink(...)
+    message: Taint should parse with interfile enabled for QL
+    severity: ERROR
+
+  - id: taint_interfile_smoke_terraform
+    mode: taint
+    languages: [terraform]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source()
+    pattern-sinks:
+      - pattern: sink(...)
+    message: Taint should run with interfile enabled for Terraform
+    severity: ERROR
+
+  - id: taint_interfile_smoke_vue
+    mode: taint
+    languages: [vue]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source()
+    pattern-sinks:
+      - pattern: sink(...)
+    message: Taint should run with interfile enabled for Vue
+    severity: ERROR
+
+  - id: taint_interfile_smoke_xml
+    mode: taint
+    languages: [xml]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: <source />
+    pattern-sinks:
+      - pattern: <sink>...</sink>
+    message: Taint should run with interfile enabled for XML
+    severity: ERROR
+
+  - id: taint_interfile_smoke_yaml
+    mode: taint
+    languages: [yaml]
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: |
+          source
+    pattern-sinks:
+      - pattern: |
+          sink: ...
+    message: Taint should run with interfile enabled for YAML
+    severity: ERROR

@@ -19,7 +19,12 @@ let reverse_reachable_subgraph (g : graph) (targets : vertex list) : graph =
       if not (G.mem_vertex sg t) then G.add_vertex sg t;
       if G.mem_vertex g t then
         RBfs.fold_component
-          (fun v sg -> G.fold_pred_e (fun e sg -> G.add_edge_e sg e; sg) g v sg)
+          (fun v sg ->
+            G.fold_pred_e
+              (fun e sg ->
+                G.add_edge_e sg e;
+                sg)
+              g v sg)
           sg g t
       else sg)
     (G.create ()) targets
@@ -35,13 +40,27 @@ let reachable_vertices_batch (g : graph) (starts : vertex list) : VSet.t =
       else visited)
     VSet.empty starts
 
+let forward_reachable_subgraph (g : graph) (starts : vertex list) : graph =
+  let keep = reachable_vertices_batch g starts in
+  let sg = G.create () in
+  VSet.iter (G.add_vertex sg) keep;
+  G.iter_edges_e
+    (fun edge ->
+      let src = G.E.src edge in
+      let dst = G.E.dst edge in
+      if VSet.mem src keep && VSet.mem dst keep then G.add_edge_e sg edge)
+    g;
+  sg
+
 (* Compute the subgraph containing only functions relevant for taint flow
    from sources to sinks. Excludes dead-end nodes that have no independent
    source/sink connections. *)
 let compute_relevant_subgraph (graph : Call_graph.G.t)
-    ~(sources : Function_id.t list) ~(sinks : Function_id.t list) : Call_graph.G.t =
+    ~(sources : Function_id.t list) ~(sinks : Function_id.t list) :
+    Call_graph.G.t =
   match (sources, sinks) with
-  | [], _ | _, [] ->
+  | [], _
+  | _, [] ->
       Call_graph.G.create ()
   | _ :: _, _ :: _ ->
       let source_set = VSet.of_list sources in
@@ -59,18 +78,25 @@ let compute_relevant_subgraph (graph : Call_graph.G.t)
          2. It has a predecessor that is source/sink or in XOR (entry point), OR
          3. It has multiple predecessors in common (bridge between groups) *)
       let is_relevant v =
-        is_source_or_sink v ||
-        (try
+        is_source_or_sink v
+        ||
+        try
           let preds = G.fold_pred (fun p acc -> p :: acc) graph v [] in
           (* Entry point: has pred that is source/sink or in XOR *)
-          let is_entry = List.exists (fun pred ->
-            is_source_or_sink pred ||
-            (VSet.mem pred from_sources <> VSet.mem pred from_sinks)
-          ) preds in
+          let is_entry =
+            List.exists
+              (fun pred ->
+                is_source_or_sink pred
+                || VSet.mem pred from_sources <> VSet.mem pred from_sinks)
+              preds
+          in
           (* Bridge: has multiple predecessors in common *)
-          let preds_in_common = List.filter (fun p -> VSet.mem p common) preds in
+          let preds_in_common =
+            List.filter (fun p -> VSet.mem p common) preds
+          in
           is_entry || List.length preds_in_common > 1
-        with _ -> false)
+        with
+        | _ -> false
       in
       let relevant = VSet.filter is_relevant common in
 

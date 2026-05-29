@@ -1,0 +1,1 @@
+fun sourceSink(): String = "tainted"

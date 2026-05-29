@@ -1,0 +1,28 @@
+rules:
+  - id: taint_interfile_constructor_field_instance_js
+    message: Taint should flow through JavaScript constructor-assigned helper instances
+    languages: [js]
+    severity: WARNING
+    mode: taint
+    paths:
+      include:
+        - "**/javascript/**"
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_constructor_field_instance_ts
+    message: Taint should flow through TypeScript constructor-assigned helper instances
+    languages: [typescript]
+    severity: WARNING
+    mode: taint
+    paths:
+      include:
+        - "**/typescript/**"
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

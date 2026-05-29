@@ -1,7 +1,7 @@
 type propagator_match = {
   id : Taint_rule_inst.var;
-      (** An unique identifier for the propagator match. This is used as an
-   * auxiliary variable to store the taints flowing from `from` to `to`. *)
+      (** An unique identifier for the propagator match. This is used as an *
+          auxiliary variable to store the taints flowing from `from` to `to`. *)
   rwm : Range_with_metavars.t;
   from : Range.t;  (** The range matched by the `from` metavariable. *)
   to_ : Range.t;  (** The range matched by the `to` metavariable. *)
@@ -32,12 +32,14 @@ val hook_mk_taint_spec_match_preds :
 val taint_config_of_rule :
   per_file_formula_cache:Formula_cache.t ->
   ?handle_effects:Taint_rule_inst.effects_handler
-    (** Use 'handle_effects' to e.g. apply hash-consing (see 'Deep_tainting'), or
-        to do some side-effect if needed.
+    (** Use 'handle_effects' to e.g. apply hash-consing (see 'Deep_tainting'),
+        or to do some side-effect if needed.
 
         old: In the past one had to use 'handle_effects' to record taint effects
-          by side-effect (no pun intended), however this is not needed now because
-          'Dataflow_tainting.fixpoint' already returns the set of taint effects. *) ->
+        by side-effect (no pun intended), however this is not needed now because
+        'Dataflow_tainting.fixpoint' already returns the set of taint effects.
+    *) ->
+  ?allow_missing_sources:bool ->
   Match_env.xconfig ->
   Lang.t ->
   Fpath.t ->

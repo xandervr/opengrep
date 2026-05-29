@@ -1,0 +1,308 @@
+rules:
+  - id: taint_interfile_matrix_apex
+    message: Taint should flow across Apex files
+    languages: [apex]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_bash
+    message: Taint should flow across Bash files
+    languages: [bash]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source_cmd ...
+    pattern-sinks:
+      - pattern: sink_cmd ...
+
+  - id: taint_interfile_matrix_c
+    message: Taint should flow across C files
+    languages: [c]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_cairo
+    message: Taint should flow across Cairo files
+    languages: [cairo]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_circom
+    message: Taint should flow across Circom files
+    languages: [circom]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_clojure
+    message: Taint should flow across Clojure files
+    languages: [clojure]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: (source)
+    pattern-sinks:
+      - pattern: (sink ...)
+
+  - id: taint_interfile_matrix_cpp
+    message: Taint should flow across C++ files
+    languages: [cpp]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_csharp
+    message: Taint should flow across C# files
+    languages: [csharp]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_dart
+    message: Taint should flow across Dart files
+    languages: [dart]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_hack
+    message: Taint should flow across Hack files
+    languages: [hack]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_julia
+    message: Taint should flow across Julia files
+    languages: [julia]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_kotlin
+    message: Taint should flow across Kotlin files
+    languages: [kotlin]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_lua
+    message: Taint should flow across Lua files
+    languages: [lua]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_lisp
+    message: Taint should flow across Lisp files
+    languages: [lisp]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: (source)
+    pattern-sinks:
+      - pattern: (sink ...)
+
+  - id: taint_interfile_matrix_move_on_aptos
+    message: Taint should flow across Move on Aptos files
+    languages: [move_on_aptos]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: aptos_source(...)
+    pattern-sinks:
+      - pattern: aptos_sink(...)
+
+  - id: taint_interfile_matrix_move_on_sui
+    message: Taint should flow across Move on Sui files
+    languages: [move_on_sui]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: sui_source(...)
+    pattern-sinks:
+      - pattern: sui_sink(...)
+
+  - id: taint_interfile_matrix_ocaml
+    message: Taint should flow across OCaml files
+    languages: [ocaml]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source ()
+    pattern-sinks:
+      - pattern: sink (...)
+
+  - id: taint_interfile_matrix_php
+    message: Taint should flow across PHP files
+    languages: [php]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_r
+    message: Taint should flow across R files
+    languages: [r]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_ruby
+    message: Taint should flow across Ruby files
+    languages: [ruby]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_rust
+    message: Taint should flow across Rust files
+    languages: [rust]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_scala
+    message: Taint should flow across Scala files
+    languages: [scala]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_scheme
+    message: Taint should flow across Scheme files
+    languages: [scheme]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: (source)
+    pattern-sinks:
+      - pattern: (sink ...)
+
+  - id: taint_interfile_matrix_solidity
+    message: Taint should flow across Solidity files
+    languages: [solidity]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_swift
+    message: Taint should flow across Swift files
+    languages: [swift]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_typescript
+    message: Taint should flow across TypeScript files
+    languages: [typescript]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_vue
+    message: Taint should flow across Vue files
+    languages: [vue]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)
+
+  - id: taint_interfile_matrix_vb
+    message: Taint should flow across Visual Basic files
+    languages: [vb]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

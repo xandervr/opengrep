@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_typescript_multi_provider_collection_metadata
+    message: Taint should flow through TypeScript multi-provider collection metadata
+    languages: [typescript]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

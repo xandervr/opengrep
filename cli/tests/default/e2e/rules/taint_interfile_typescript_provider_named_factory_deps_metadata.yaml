@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_typescript_provider_named_factory_deps_metadata
+    message: Taint should flow through TypeScript named provider factory dependency metadata
+    languages: [typescript]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

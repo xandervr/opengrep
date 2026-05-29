@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_async_provider_container
+    message: Taint should flow through async JavaScript and TypeScript provider containers
+    languages: [js, ts]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

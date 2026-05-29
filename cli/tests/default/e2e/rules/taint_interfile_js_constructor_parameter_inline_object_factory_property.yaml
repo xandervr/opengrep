@@ -1,0 +1,12 @@
+rules:
+  - id: taint_interfile_js_constructor_parameter_inline_object_factory_property
+    message: Taint should flow through JavaScript inline object factory properties
+    languages: [js]
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

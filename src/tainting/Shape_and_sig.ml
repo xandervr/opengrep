@@ -334,6 +334,9 @@ and Effect : sig
             example: * * x = ["ok"] * * def foo(): * global x * x[0] = "taint" *
             * We infer: * * ToLval(["taint"], "x[0]") * * TODO: Record taint
             shapes. *)
+    | CleanLval of Taint.lval
+        (** A side-effect sanitizer cleans an l-value in the scope of the
+            function/method. *)
     | ToSinkInCall of {
         callee : IL.exp;
             (** The function expression being called, it is used for recording a
@@ -388,6 +391,7 @@ end = struct
     | ToSink of taints_to_sink
     | ToReturn of taints_to_return
     | ToLval of T.taints * T.lval (* TODO: CleanArg ? *)
+    | CleanLval of T.lval
     | ToSinkInCall of {
         callee : IL.exp;
         arg : Taint.arg;
@@ -473,6 +477,7 @@ end = struct
         match Taints.compare ts1 ts2 with
         | 0 -> T.compare_lval lv1 lv2
         | other -> other)
+    | CleanLval lv1, CleanLval lv2 -> T.compare_lval lv1 lv2
     | ( ToSinkInCall { callee = fexp1; arg = fvar1; args_taints = args_taints1 },
         ToSinkInCall { callee = fexp2; arg = fvar2; args_taints = args_taints2 }
       ) -> (
@@ -483,12 +488,14 @@ end = struct
             | 0 -> List.compare compare_arg args_taints1 args_taints2
             | other -> other)
         | other -> other)
-    | ToSink _, (ToReturn _ | ToLval _ | ToSinkInCall _) -> -1
-    | ToReturn _, (ToLval _ | ToSinkInCall _) -> -1
-    | ToLval _, ToSinkInCall _ -> -1
+    | ToSink _, (ToReturn _ | ToLval _ | CleanLval _ | ToSinkInCall _) -> -1
+    | ToReturn _, (ToLval _ | CleanLval _ | ToSinkInCall _) -> -1
+    | ToLval _, (CleanLval _ | ToSinkInCall _) -> -1
+    | CleanLval _, ToSinkInCall _ -> -1
     | ToReturn _, ToSink _ -> 1
     | ToLval _, (ToSink _ | ToReturn _) -> 1
-    | ToSinkInCall _, (ToSink _ | ToReturn _ | ToLval _) -> 1
+    | CleanLval _, (ToSink _ | ToReturn _ | ToLval _) -> 1
+    | ToSinkInCall _, (ToSink _ | ToReturn _ | ToLval _ | CleanLval _) -> 1
 
   (*************************************)
   (* Pretty-printing *)
@@ -543,6 +550,7 @@ end = struct
     | ToReturn ttr -> show_taints_to_return ttr
     | ToLval (taints, lval) ->
         Printf.sprintf "%s ----> %s" (T.show_taints taints) (T.show_lval lval)
+    | CleanLval lval -> Printf.sprintf "clean(%s)" (T.show_lval lval)
     | ToSinkInCall { callee = _; arg; args_taints } ->
         Printf.sprintf "'call<%s>%s" (T.show_arg arg)
           (show_args_taints args_taints)

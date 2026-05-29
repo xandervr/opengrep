@@ -1,0 +1,13 @@
+rules:
+  - id: taint_interfile_java
+    message: Taint should flow through Java static helpers in other files
+    languages:
+      - java
+    severity: WARNING
+    mode: taint
+    options:
+      interfile: true
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

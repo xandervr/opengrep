@@ -1,0 +1,36 @@
+rules:
+  - id: taint_interfile_typed_callback_java
+    mode: taint
+    languages: [java]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: sourceReturn(...)
+      - pattern: sourceSink(...)
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile typed callback taint
+    severity: WARNING
+
+  - id: taint_interfile_typed_callback_kotlin
+    mode: taint
+    languages: [kotlin]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: sourceReturn(...)
+      - pattern: sourceSink(...)
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile typed callback taint
+    severity: WARNING
+
+  - id: taint_interfile_typed_callback_csharp
+    mode: taint
+    languages: [csharp]
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: sourceReturn(...)
+      - pattern: sourceSink(...)
+    pattern-sinks:
+      - pattern: sink(...)
+    message: interfile typed callback taint
+    severity: WARNING

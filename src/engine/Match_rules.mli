@@ -11,6 +11,8 @@ type timeout_config = {
   caps : < Cap.time_limit >;
 }
 
+type interfile_taint_cache = Match_tainting_mode.interfile_taint_cache
+
 (* Matches many rules against one target. This function is called from
  * Test_engine.ml, Test_subcommand.ml, and of course Core_scan.ml
  * (and also Match_extract_mode.ml now).
@@ -35,12 +37,21 @@ type timeout_config = {
  *)
 val check :
   ?dependency_match_table:Match_SCA_mode.dependency_match_table ->
+  ?interfile_taint_cache:interfile_taint_cache ->
   match_hook:(Core_match.t -> unit) ->
   timeout:timeout_config option ->
   Match_env.xconfig ->
   Rule.rules ->
   Xtarget.t ->
   Core_result.matches_single_file
+
+val check_taint_signatures :
+  match_hook:(Core_match.t -> unit) ->
+  timeout:timeout_config option ->
+  Match_env.xconfig ->
+  Rule.rules ->
+  Xtarget.t ->
+  interfile_taint_cache * Core_result.matches_single_file
 
 (* for osemgrep interactive *)
 val is_relevant_rule_for_xtarget :

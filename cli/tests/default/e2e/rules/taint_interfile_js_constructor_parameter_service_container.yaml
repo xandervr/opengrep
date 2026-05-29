@@ -1,0 +1,11 @@
+rules:
+  - id: taint_interfile_js_constructor_parameter_service_container
+    message: Taint should flow through JavaScript constructor parameter service containers
+    languages: [js]
+    severity: WARNING
+    mode: taint
+    options: { interfile: true }
+    pattern-sources:
+      - pattern: source(...)
+    pattern-sinks:
+      - pattern: sink(...)

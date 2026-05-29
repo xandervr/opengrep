@@ -37,6 +37,70 @@ let lang_to_python_parsing_mode = function
   | Lang.Python3 -> Parse_python.Python3
   | s -> failwith (spf "not a python language:%s" (Lang.to_string s))
 
+let find_substring_from s needle start =
+  let len = String.length s in
+  let needle_len = String.length needle in
+  let rec loop i =
+    if i + needle_len > len then None
+    else if String.equal (String.sub s i needle_len) needle then Some i
+    else loop (i + 1)
+  in
+  loop start
+
+let find_char_from s ch start =
+  let len = String.length s in
+  let rec loop i =
+    if i >= len then None
+    else if Char.equal s.[i] ch then Some i
+    else loop (i + 1)
+  in
+  loop start
+
+let blank_non_newlines contents =
+  Bytes.init (String.length contents) (fun i ->
+      match contents.[i] with
+      | '\n'
+      | '\r' ->
+          contents.[i]
+      | _ -> ' ')
+
+let copy_range contents dest start stop =
+  for i = start to stop - 1 do
+    Bytes.set dest i contents.[i]
+  done
+
+let vue_script_contents contents =
+  let lower = String.lowercase_ascii contents in
+  let dest = blank_non_newlines contents in
+  let rec loop search_pos =
+    match find_substring_from lower "<script" search_pos with
+    | None -> Bytes.unsafe_to_string dest
+    | Some tag_start -> (
+        match find_char_from lower '>' tag_start with
+        | None -> Bytes.unsafe_to_string dest
+        | Some tag_end ->
+            let body_start = tag_end + 1 in
+            let body_end, next_pos =
+              match find_substring_from lower "</script>" body_start with
+              | None -> (String.length contents, String.length contents)
+              | Some close_start -> (close_start, close_start + 9)
+            in
+            copy_range contents dest body_start body_end;
+            loop next_pos)
+  in
+  loop 0
+
+let parse_vue_script file =
+  let contents = UFile.read_file file |> vue_script_contents in
+  run file
+    [
+      TreeSitter
+        (fun _ ->
+          Parse_typescript_tree_sitter.parse_string ~dialect:`TSX ~src_file:file
+            contents);
+    ]
+    Js_to_generic.program
+
 (*****************************************************************************)
 (* Entry point *)
 (*****************************************************************************)
@@ -162,7 +226,7 @@ let just_parse_with_lang lang file : Parsing_result2.t =
       run file
         [ TreeSitter (Parse_typescript_tree_sitter.parse ?dialect:None) ]
         Js_to_generic.program
-  | Lang.Vue -> failwith "Vue support has been removed in 1.93.0"
+  | Lang.Vue -> parse_vue_script file
   (* there is no pfff parsers for C#/Kotlin/... so let's just use
    * tree-sitter, and there's no ast_xxx.ml either so we directly generate
    * a generic AST (no calls to an xxx_to_generic() below)
