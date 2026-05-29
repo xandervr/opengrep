@@ -859,6 +859,33 @@ let combine_match_results (a : Core_result.matches_single_file)
 (* a "core" scan *)
 (*****************************************************************************)
 
+(* Minimum per-rule timeout (in seconds) for the inter-file taint precompute.
+ * Each inter-file rule is analyzed once over the merged whole-repo AST, which
+ * is much heavier than a single file, so the regular per-rule timeout (5s by
+ * default) cuts heavy rules short and drops their cross-file findings. We floor
+ * the precompute's per-rule timeout at this value while still honoring an
+ * explicit larger [--timeout] and an explicit "no limit" ([--timeout 0]).
+ * 15s is a moderate raise: rules that need 5-15s now complete, while genuinely
+ * O(repo)-expensive rules are still bounded so a single rule cannot stall the
+ * whole scan. *)
+let interfile_min_rule_timeout = 15.0
+
+(* Raise the per-rule timeout for the inter-file precompute (see
+ * [interfile_min_rule_timeout]). A non-positive timeout means "no limit" and is
+ * left untouched. *)
+let raise_timeout_for_interfile (timeout : Match_rules.timeout_config option) :
+    Match_rules.timeout_config option =
+  Option.map
+    (fun (tc : Match_rules.timeout_config) ->
+      if tc.Match_rules.timeout <= 0. then tc
+      else
+        {
+          tc with
+          Match_rules.timeout =
+            Float.max tc.Match_rules.timeout interfile_min_rule_timeout;
+        })
+    timeout
+
 (* build the callback for iter_targets_and_get_matches_and_exn_to_errors *)
 let mk_target_handler (caps : < Cap.time_limit >) (config : Core_scan_config.t)
     (valid_rules : Rule.t list)
@@ -1002,7 +1029,8 @@ let mk_target_handler (caps : < Cap.time_limit >) (config : Core_scan_config.t)
                           try
                             let _cache, matches =
                               Match_rules.check_taint_signatures ~match_hook
-                                ~timeout interfile_xconf interfile_rules
+                                ~timeout:(raise_timeout_for_interfile timeout)
+                                interfile_xconf interfile_rules
                                 interfile_xtarget
                             in
                             matches

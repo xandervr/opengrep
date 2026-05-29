@@ -377,7 +377,10 @@ let o_timeout : float Term.t =
       ~doc:
         (spf
            {|Maximum time to spend running a rule on a single file in
-seconds. If set to 0 will not have time limit. Defaults to %.1f s.
+seconds. If set to 0 will not have time limit. Defaults to %.1f s. With
+--taint-interfile, each rule runs over the whole merged program, so the
+effective per-rule timeout is floored at 15s unless a larger value is given
+here (0 still means no limit).
 |}
            default)
   in
@@ -769,7 +772,10 @@ let o_taint_interfile : bool Term.t =
       ~doc:
         ("Enable inter-file taint analysis for taint-mode rules. This forces \
           taint rules through cross-file analysis; the per-rule \
-          options.interfile: true setting remains supported.")
+          options.interfile: true setting remains supported. Because each \
+          inter-file rule is analyzed over the whole merged program, this \
+          raises the effective per-rule timeout floor to 15s (rules are still \
+          capped at --timeout when it is larger; --timeout 0 means no limit).")
   in
   Arg.value (Arg.flag info)
 
